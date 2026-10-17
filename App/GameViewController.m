@@ -211,7 +211,7 @@ static double gKeyLastRep[256];
             content.center = CGPointMake(_keyPad.bounds.size.width / 2, _keyPad.bounds.size.height / 2);
         }
     } else {
-        _keyPad.frame = CGRectMake(0, vb.height, vb.size.width, padH);
+        _keyPad.frame = CGRectMake(0, vb.size.height, vb.size.width, padH);
     }
 }
 
