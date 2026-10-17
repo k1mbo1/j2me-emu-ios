@@ -44,7 +44,9 @@ static void ensureSession(void) {
     gSessionConfigured = YES;
     NSError* err = nil;
     [[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryAmbient
-                                            options:0 error:&err];
+                                            mode:AVAudioSessionModeDefault
+                                         options:0
+                                           error:&err];
     if (err) NSLog(@"[audio] session category error: %@", err);
 }
 
