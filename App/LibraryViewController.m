@@ -24,7 +24,7 @@ static NSString* kRmsRoot(void) {
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.title = @"Java 模拟器";
-    self.tableView.registerClass:[UITableViewCell class] forCellReuseIdentifier:@"game"];
+    [self.tableView registerClass:[UITableViewCell class] forCellReuseIdentifier:@"game"];
     self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc]
         initWithBarButtonSystemItem:UIBarButtonSystemItemAdd
         target:self action:@selector(importTapped:)];
