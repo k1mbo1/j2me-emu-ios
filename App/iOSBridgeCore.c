@@ -4,6 +4,7 @@
  */
 #include "iOSBridge.h"
 #include "HttpIos.h"
+#include "AudioIos.h"
 #include "vm.h"
 #include "bridge_common.h"
 
@@ -156,6 +157,22 @@ static Slot n_httpExecute(VMThread* t, Slot* a) {
     return r;
 }
 
+/* MMAPI 媒体平台：AVAudioPlayer（AudioIos） */
+static int mp_create(const void* wav, size_t len, int autoClose) { return audioIosCreate(wav, len, autoClose); }
+static int mp_start(int h) { return audioIosStart(h); }
+static int mp_stop(int h)  { return audioIosStop(h); }
+static void mp_close(int h) { audioIosClose(h); }
+static int mp_prefetch(int h) { return audioIosPrefetch(h); }
+static void mp_setVolume(int h, int v) { audioIosSetVolume(h, v); }
+static int mp_volume(int h) { return audioIosVolume(h); }
+static int mp_state(int h) { return audioIosState(h); }
+static long mp_duration(int h) { return audioIosDurationMs(h); }
+static long mp_position(int h) { return audioIosPositionMs(h); }
+static void mp_setLoop(int h, int c) { audioIosSetLoop(h, c); }
+static void mp_pauseAll(void) { audioIosPauseAll(); }
+static void mp_resumeAll(void) { audioIosResumeAll(); }
+static void mp_stopAll(void) { audioIosStopAll(); }
+
 static void registerPlatformNatives(void) {
     vmRegisterNative("javax/microedition/lcdui/Canvas", "nativeRepaint", "()V", n_noop);
     vmRegisterNative("javax/microedition/lcdui/Screen", "nativeRepaint", "()V", n_noop);
@@ -259,6 +276,14 @@ int j2meStart(const char* midpJarPath, const char* gameJarPath, const char* rmsD
     }
 
     bridgeSetRmsDir(rmsDir ? rmsDir : "");
+    {
+        static MediaPlatform iosMedia = {
+            mp_create, mp_start, mp_stop, mp_close, mp_prefetch,
+            mp_setVolume, mp_volume, mp_state, mp_duration, mp_position,
+            mp_setLoop, mp_pauseAll, mp_resumeAll, mp_stopAll
+        };
+        bridgeSetMediaPlatform(&iosMedia);
+    }
     bridgeRegisterCommonNatives();
     registerPlatformNatives();
     gThread = vmCurrentThread();
@@ -359,6 +384,7 @@ void j2meKey(int keyCode, int down) {
 }
 
 void j2mePause(void) {
+    audioIosPauseAll();
     if (!gThread || !gRunning || !gMainClass[0]) return;
     if (vmCallSpecialByName(gThread, gMidlet, gMainClass, "pauseApp", "()V") != 0)
         printException(gThread, "pauseApp");
@@ -368,9 +394,11 @@ void j2meResume(void) {
     if (!gThread || !gRunning || !gMainClass[0]) return;
     if (vmCallSpecialByName(gThread, gMidlet, gMainClass, "startApp", "()V") != 0)
         printException(gThread, "startApp");
+    audioIosResumeAll();
 }
 
 void j2meDestroy(void) {
+    audioIosStopAll();
     if (!gThread) return;
     if (gMidlet) {
         /* destroyApp(true)，异常忽略 */

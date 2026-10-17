@@ -82,6 +82,75 @@ static Slot n_httpExecute(VMThread* t, Slot* a) {
     return r;
 }
 
+/* ============ headless 媒体平台：create 落盘 WAV 验证 ============ */
+
+typedef struct {
+    int used;
+    long durationMs;
+    int playing;
+    int volume;
+} HM;
+static HM hm[64];
+static int hmNextHandle = 1;
+
+static int hCreate(const void* wav, size_t len, int autoClose) {
+    (void)autoClose;
+    char path[128];
+    snprintf(path, sizeof(path), "out_media_%d.wav", hmNextHandle);
+    FILE* f = fopen(path, "wb");
+    if (!f) return -1;
+    if (len) fwrite(wav, 1, len, f);
+    fclose(f);
+    /* WAV 头解析时长（44 字节标准头，data 长度 @40，采样率 @24，16bit mono） */
+    long ms = -1;
+    const uint8_t* p = (const uint8_t*)wav;
+    if (len >= 44) {
+        uint32_t dataLen = (uint32_t)p[40] | ((uint32_t)p[41] << 8) | ((uint32_t)p[42] << 16) | ((uint32_t)p[43] << 24);
+        uint32_t rate = (uint32_t)p[24] | ((uint32_t)p[25] << 8) | ((uint32_t)p[26] << 16) | ((uint32_t)p[27] << 24);
+        if (rate > 0 && dataLen > 0) ms = (long)(dataLen / 2) * 1000L / (long)rate;
+    }
+    int h = hmNextHandle++;
+    if (h < 64) {
+        hm[h].used = 1; hm[h].durationMs = ms; hm[h].playing = 0; hm[h].volume = 100;
+    }
+    vmLog("[media] create h=%d -> %s (%d bytes, %ld ms)", h, path, (int)len, ms);
+    return h;
+}
+static int hStart(int h) {
+    if (h < 0 || h >= 64 || !hm[h].used) return -1;
+    hm[h].playing = 1;
+    vmLog("[media] start h=%d", h);
+    return 0;
+}
+static int hStop(int h) {
+    if (h < 0 || h >= 64 || !hm[h].used) return -1;
+    hm[h].playing = 0;
+    return 0;
+}
+static void hClose(int h) {
+    if (h < 0 || h >= 64) return;
+    hm[h].used = 0; hm[h].playing = 0;
+}
+static int hPrefetch(int h) { (void)h; return 0; }
+static void hSetVolume(int h, int v) { if (h >= 0 && h < 64 && hm[h].used) hm[h].volume = v; }
+static int hVolume(int h) { return (h >= 0 && h < 64 && hm[h].used) ? hm[h].volume : -1; }
+static int hState(int h) {
+    if (h < 0 || h >= 64 || !hm[h].used) return -1;
+    return hm[h].playing ? 1 : 0;
+}
+static long hDuration(int h) { return (h >= 0 && h < 64 && hm[h].used) ? hm[h].durationMs : -1; }
+static long hPosition(int h) { return (h >= 0 && h < 64 && hm[h].used && hm[h].playing) ? 0 : 0; }
+static void hSetLoop(int h, int c) { vmLog("[media] loop h=%d count=%d", h, c); }
+static void hPauseAll(void) {}
+static void hResumeAll(void) {}
+static void hStopAll(void) {}
+
+static MediaPlatform headlessMedia = {
+    hCreate, hStart, hStop, hClose, hPrefetch,
+    hSetVolume, hVolume, hState, hDuration, hPosition,
+    hSetLoop, hPauseAll, hResumeAll, hStopAll
+};
+
 static void registerPlatformNatives(void) {
     vmRegisterNative("javax/microedition/lcdui/Canvas", "nativeRepaint", "()V", n_noop);
     vmRegisterNative("javax/microedition/lcdui/Screen", "nativeRepaint", "()V", n_noop);
@@ -146,6 +215,7 @@ static int runMidlet(const char* midpJar, const char* gameJar, const char* cls,
     bridgeSetRmsDir(rmsDir);
     bridgeRegisterCommonNatives();
     registerPlatformNatives();
+    bridgeSetMediaPlatform(&headlessMedia);
 
     VMThread* t = vmCurrentThread();
     Class* c = vmFindClass(cls);
@@ -258,6 +328,7 @@ int main(int argc, char** argv) {
     }
     bridgeRegisterCommonNatives();
     registerPlatformNatives();
+    bridgeSetMediaPlatform(&headlessMedia);
     if (argc >= 3 && argv[2][0] && vmAddJar(argv[2]) != 0) {
         fprintf(stderr, "[main] game jar load failed\n");
         return 1;

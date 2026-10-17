@@ -38,6 +38,7 @@ targets:
         OTHER_LDFLAGS: ["-ObjC"]
     dependencies:
       - sdk: AudioToolbox.framework
+      - sdk: AVFoundation.framework
       - sdk: CoreGraphics.framework
       - sdk: Foundation.framework
       - sdk: GameController.framework

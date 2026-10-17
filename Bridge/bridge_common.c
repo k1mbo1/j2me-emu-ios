@@ -8,8 +8,10 @@
 #include "bridge_common.h"
 #include "font8x12.h"
 #include "miniz/miniz.h"
+#include "midi_synth.h"
 #include <sys/stat.h>
 #include <errno.h>
+#include <string.h>
 #ifdef _WIN32
 #include <direct.h>
 #endif
@@ -407,6 +409,192 @@ static Slot n_listStores(VMThread* t, Slot* a) {
 
 /* ============ 注册 ============ */
 
+/* ============ 媒体（MMAPI 音效）============ */
+
+static MediaPlatform g_media;
+
+void bridgeSetMediaPlatform(const MediaPlatform* mp) {
+    if (mp) g_media = *mp;
+    else memset(&g_media, 0, sizeof(g_media));
+}
+
+/* type 判定（大小写不敏感子串） */
+static int typeHas(const char* type, const char* what) {
+    if (!type) return 0;
+    size_t wl = strlen(what);
+    for (const char* p = type; *p; p++) {
+        size_t k = 0;
+        while (k < wl && p[k]) {
+            char a = p[k], b = what[k];
+            if (a >= 'A' && a <= 'Z') a += 32;
+            if (b >= 'A' && b <= 'Z') b += 32;
+            if (a != b) break;
+            k++;
+        }
+        if (k == wl) return 1;
+    }
+    return 0;
+}
+
+/* PlayerImpl.nCreate(byte[] data, String mimeType) -> handle */
+static Slot n_mediaCreate(VMThread* t, Slot* a) {
+    Slot r;
+    r.ref = NULL;
+    r.i = -1;
+    ArrayObject* data = (ArrayObject*)UNREF(a[0].ref);
+    Object* typeS = UNREF(a[1].ref);
+    char* type = typeS ? vmStringToUTF(t, typeS) : NULL;
+    if (!data) { free(type); return r; }
+    uint8_t* p = (uint8_t*)ARRAY_DATA(data);
+    int32_t n = data->length;
+    if (n < 4) { free(type); return r; }
+
+    int16_t* pcm = NULL;
+    size_t pcmLen = 0;
+    int isMidi = typeHas(type, "midi") || (type == NULL && n > 4 && memcmp(p, "MThd", 4) == 0);
+    if (isMidi) pcm = synthMidi(p, (size_t)n, &pcmLen);
+    else if (typeHas(type, "tone-seq")) pcm = synthToneSeq(p, (size_t)n, &pcmLen);
+    free(type);
+    if (pcm) {
+        size_t wavLen = 0;
+        uint8_t* wav = pcmToWav(pcm, pcmLen, &wavLen);
+        free(pcm);
+        if (!wav) return r;
+        if (g_media.create) r.i = g_media.create(wav, wavLen, 0);
+        free(wav);
+        return r;
+    }
+    /* 非 MIDI/ToneControl：字节流透传（wav/mp3/aac 由平台播放器解） */
+    if (g_media.create) r.i = g_media.create(p, (size_t)n, 0);
+    return r;
+}
+
+/* PlayerImpl.nCreateToneSeq(byte[] seq) -> handle（ToneControl 音序） */
+static Slot n_mediaCreateToneSeq(VMThread* t, Slot* a) {
+    Slot r;
+    r.ref = NULL;
+    r.i = -1;
+    ArrayObject* seq = (ArrayObject*)UNREF(a[0].ref);
+    if (!seq) return r;
+    size_t pcmLen = 0;
+    int16_t* pcm = synthToneSeq((const uint8_t*)ARRAY_DATA(seq), (size_t)seq->length, &pcmLen);
+    if (!pcm) return r;
+    size_t wavLen = 0;
+    uint8_t* wav = pcmToWav(pcm, pcmLen, &wavLen);
+    free(pcm);
+    if (!wav) return r;
+    if (g_media.create) r.i = g_media.create(wav, wavLen, 0);
+    free(wav);
+    return r;
+}
+
+/* Manager.nPlayTone(int note, int durMs, int vol) -> 0 成功
+ * 非阻塞（VM 跑主线程，阻塞会卡死帧循环；规范允许近似） */
+static Slot n_playTone(VMThread* t, Slot* a) {
+    (void)t;
+    Slot r;
+    r.ref = NULL;
+    r.i = -1;
+    int note = (int)a[0].i, durMs = (int)a[1].i, vol = (int)a[2].i;
+    size_t pcmLen = 0;
+    int16_t* pcm = synthTone(note, durMs, vol, &pcmLen);
+    if (!pcm) return r;
+    size_t wavLen = 0;
+    uint8_t* wav = pcmToWav(pcm, pcmLen, &wavLen);
+    free(pcm);
+    if (!wav) return r;
+    if (g_media.create) {
+        int h = g_media.create(wav, wavLen, 1);   /* autoClose：播完平台自动回收 */
+        if (h >= 0 && g_media.start) {
+            g_media.start(h);
+            r.i = 0;
+        }
+    }
+    free(wav);
+    return r;
+}
+
+static Slot n_mediaStart(VMThread* t, Slot* a) {
+    (void)t;
+    Slot r; r.ref = NULL;
+    r.i = (g_media.start && g_media.start((int)a[0].i) == 0) ? 0 : -1;
+    return r;
+}
+static Slot n_mediaStop(VMThread* t, Slot* a) {
+    (void)t;
+    Slot r; r.ref = NULL;
+    r.i = (g_media.stop && g_media.stop((int)a[0].i) == 0) ? 0 : -1;
+    return r;
+}
+static Slot n_mediaClose(VMThread* t, Slot* a) {
+    (void)t;
+    Slot r; r.ref = NULL;
+    if (g_media.close) g_media.close((int)a[0].i);
+    return r;
+}
+static Slot n_mediaPrefetch(VMThread* t, Slot* a) {
+    (void)t;
+    Slot r; r.ref = NULL;
+    r.i = (g_media.prefetch && g_media.prefetch((int)a[0].i) != 0) ? -1 : 0;
+    return r;
+}
+static Slot n_mediaSetLoop(VMThread* t, Slot* a) {
+    (void)t;
+    Slot r; r.ref = NULL;
+    if (g_media.setLoop) g_media.setLoop((int)a[0].i, (int)a[1].i);
+    return r;
+}
+static Slot n_mediaSetVolume(VMThread* t, Slot* a) {
+    (void)t;
+    Slot r; r.ref = NULL;
+    if (g_media.setVolume) g_media.setVolume((int)a[0].i, (int)a[1].i);
+    return r;
+}
+static Slot n_mediaGetVolume(VMThread* t, Slot* a) {
+    (void)t;
+    Slot r; r.ref = NULL;
+    r.i = g_media.volume ? g_media.volume((int)a[0].i) : 100;
+    return r;
+}
+static Slot n_mediaState(VMThread* t, Slot* a) {
+    (void)t;
+    Slot r; r.ref = NULL;
+    r.i = g_media.state ? g_media.state((int)a[0].i) : 0;
+    return r;
+}
+static Slot n_mediaDuration(VMThread* t, Slot* a) {
+    (void)t;
+    Slot r; r.ref = NULL;
+    r.i = g_media.durationMs ? g_media.durationMs((int)a[0].i) : -1;
+    return r;
+}
+static Slot n_mediaPosition(VMThread* t, Slot* a) {
+    (void)t;
+    Slot r; r.ref = NULL;
+    r.i = g_media.positionMs ? g_media.positionMs((int)a[0].i) : 0;
+    return r;
+}
+/* Class.nativeGetResource(String name) -> byte[]（getResourceAsStream 后端） */
+static Slot n_classGetResource(VMThread* t, Slot* a) {
+    Slot r;
+    r.ref = NULL;
+    Object* s = UNREF(a[0].ref);
+    if (!s) return r;
+    char* name = vmStringToUTF(t, s);
+    if (!name) return r;
+    size_t len = 0;
+    uint8_t* p = zipReadFile(NULL, name, &len);
+    if (!p && name[0] == '/') p = zipReadFile(NULL, name + 1, &len);
+    free(name);
+    if (!p) return r;
+    ArrayObject* arr = vmNewTypeArray(t, EK_BYTE, (int32_t)len);
+    if (arr && len > 0) memcpy(ARRAY_DATA(arr), p, len);
+    free(p);
+    if (!arr) { if (vmHasException(t)) vmClearException(t); return r; }
+    r.ref = JREF((Object*)arr);
+    return r;
+}
+
 void bridgeRegisterCommonNatives(void) {
     vmRegisterNative("javax/microedition/lcdui/Graphics", "rasterText",
                      "([IIIIIIIIILjava/lang/String;I)V", n_rasterText);
@@ -420,4 +608,33 @@ void bridgeRegisterCommonNatives(void) {
                      "(Ljava/lang/String;[B)V", n_saveStore);
     vmRegisterNative("javax/microedition/rms/RecordStore", "nativeListStores",
                      "()[Ljava/lang/String;", n_listStores);
+    vmRegisterNative("java/lang/Class", "nativeGetResource",
+                     "(Ljava/lang/String;)[B", n_classGetResource);
+    /* MMAPI */
+    vmRegisterNative("javax/microedition/media/Manager", "nPlayTone",
+                     "(III)I", n_playTone);
+    vmRegisterNative("javax/microedition/media/PlayerImpl", "nCreate",
+                     "([BLjava/lang/String;)I", n_mediaCreate);
+    vmRegisterNative("javax/microedition/media/PlayerImpl", "nCreateToneSeq",
+                     "([B)I", n_mediaCreateToneSeq);
+    vmRegisterNative("javax/microedition/media/PlayerImpl", "nStart",
+                     "(I)I", n_mediaStart);
+    vmRegisterNative("javax/microedition/media/PlayerImpl", "nStop",
+                     "(I)I", n_mediaStop);
+    vmRegisterNative("javax/microedition/media/PlayerImpl", "nClose",
+                     "(I)V", n_mediaClose);
+    vmRegisterNative("javax/microedition/media/PlayerImpl", "nPrefetch",
+                     "(I)I", n_mediaPrefetch);
+    vmRegisterNative("javax/microedition/media/PlayerImpl", "nSetLoopCount",
+                     "(II)V", n_mediaSetLoop);
+    vmRegisterNative("javax/microedition/media/PlayerImpl", "nSetVolume",
+                     "(II)V", n_mediaSetVolume);
+    vmRegisterNative("javax/microedition/media/PlayerImpl", "nGetVolume",
+                     "(I)I", n_mediaGetVolume);
+    vmRegisterNative("javax/microedition/media/PlayerImpl", "nState",
+                     "(I)I", n_mediaState);
+    vmRegisterNative("javax/microedition/media/PlayerImpl", "nDuration",
+                     "(I)J", n_mediaDuration);
+    vmRegisterNative("javax/microedition/media/PlayerImpl", "nPosition",
+                     "(I)J", n_mediaPosition);
 }
