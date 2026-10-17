@@ -1,18 +1,17 @@
-/* iOSBridge.mm - iOS 平台 Bridge：MIDlet 运行时 + 平台 natives
- * 帧循环/键事件/生命周期均由主线程驱动（VM 无锁，与 headless 验证模式一致）。
- * http 用 NSURLSession + 信号量同步等待（native 层本就要求同步语义）。
+/* iOSBridgeCore.c - iOS 平台 Bridge 核心（纯 C，无 ObjC——vm.h 的 Class 与 objc Class 冲突故拆分）
+ * MIDlet 运行时 + 平台 natives。http 走 HttpIos（ObjC 隔离层）。
+ * 所有接口主线程调用。
  */
 #include "iOSBridge.h"
+#include "HttpIos.h"
 #include "vm.h"
 #include "bridge_common.h"
 
 #include <stdarg.h>
-
-#import <Foundation/Foundation.h>
-#import <AudioToolbox/AudioToolbox.h>
+#include <AudioToolbox/AudioToolbox.h>
 
 /* VM 层 zip.c 提供 */
-extern "C" uint8_t* zipReadFile(const char* jarPath, const char* entryName, size_t* outLen);
+uint8_t* zipReadFile(const char* jarPath, const char* entryName, size_t* outLen);
 
 /* ============ 全局状态 ============ */
 static VMThread* gThread = NULL;
@@ -34,13 +33,13 @@ static void setErr(const char* fmt, ...) {
     va_start(ap, fmt);
     vsnprintf(gLastError, sizeof(gLastError), fmt, ap);
     va_end(ap);
-    NSLog(@"[j2me] ERROR: %s", gLastError);
+    fprintf(stderr, "[j2me] ERROR: %s\n", gLastError);
 }
 
-/* ============ 平台 hooks：日志走 NSLog ============ */
-static void logHook(const char* msg) { NSLog(@"[j2me] %s", msg); }
+/* ============ 平台 hooks：日志走 stderr ============ */
+static void logHook(const char* msg) { fprintf(stderr, "[j2me] %s\n", msg); }
 static void midletStateHook(int state) {
-    NSLog(@"[j2me] midlet state=%d", state);
+    fprintf(stderr, "[j2me] midlet state=%d\n", state);
 }
 static PlatformHooks gHooks = { midletStateHook, logHook };
 
@@ -57,7 +56,7 @@ static Slot n_vibrate(VMThread* t, Slot* a) {
 
 static Slot n_midletNotify(VMThread* t, Slot* a) {
     (void)t;
-    NSLog(@"[j2me] midletNotify state=%d", (int)a[0].i);
+    fprintf(stderr, "[j2me] midletNotify state=%d\n", (int)a[0].i);
     Slot r; r.ref = NULL;
     return r;
 }
@@ -104,12 +103,10 @@ static Slot n_getAppProperty(VMThread* t, Slot* a) {
     return r;
 }
 
-/* http: NSURLSession 同步执行。
+/* http: 委托 HttpIos（ObjC 隔离层）。
  * 参数: (url, method, headers "k\r\nv\r\n", body) -> byte[] 或 null(失败)
  * 返回打包: code(u2) msgLen(u2) msg hdrLen(u4) hdr bodyLen(u4) body（均大端） */
 static Slot n_httpExecute(VMThread* t, Slot* a) {
-    /* 游戏线程可能无 autorelease pool，整体包裹防泄漏 */
-    @autoreleasepool {
     Slot r;
     r.ref = NULL;
     Object* urlS = UNREF(a[0].ref);
@@ -123,78 +120,40 @@ static Slot n_httpExecute(VMThread* t, Slot* a) {
     char* headers = hdrS ? vmStringToUTF(t, hdrS) : NULL;
     if (!url || !method) { free(url); free(method); free(headers); return r; }
 
-    NSMutableURLRequest* req = [NSMutableURLRequest requestWithURL:
-        [NSURL URLWithString:[NSString stringWithUTF8String:url]]];
-    req.HTTPMethod = [NSString stringWithUTF8String:method];
-    req.timeoutInterval = 30.0;
-    if (headers && *headers) {
-        /* "k\r\nv\r\n" 成对解析 */
-        NSArray* parts = [[NSString stringWithUTF8String:headers]
-            componentsSeparatedByString:@"\r\n"];
-        for (NSUInteger i = 0; i + 1 < [parts count]; i += 2) {
-            if ([parts[i] length] == 0) continue;
-            [req setValue:parts[i + 1] forHTTPHeaderField:parts[i]];
-        }
-    }
-    if (body && body->length > 0) {
-        req.HTTPBody = [NSData dataWithBytes:ARRAY_DATA(body) length:body->length];
-    }
-
-    __block NSData* respData = nil;
-    __block NSHTTPURLResponse* httpResp = nil;
-    __block NSError* err = nil;
-    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
-    NSURLSessionDataTask* task = [[NSURLSession sharedSession]
-        dataTaskWithRequest:req completionHandler:^(NSData* data, NSURLResponse* resp, NSError* e) {
-            respData = data;
-            httpResp = [resp isKindOfClass:[NSHTTPURLResponse class]] ? (NSHTTPURLResponse*)resp : nil;
-            err = e;
-            dispatch_semaphore_signal(sem);
-        }];
-    [task resume];
-    dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER);
-
+    HttpIosResult hr;
+    int rc = httpIosPerform(url, method, headers,
+                            body ? (const uint8_t*)ARRAY_DATA(body) : NULL,
+                            body ? (size_t)body->length : 0, &hr);
     free(url); free(method); free(headers);
-    if (err || !httpResp) {
-        NSLog(@"[j2me] http 失败: %@", err.localizedDescription);
+    if (rc != 0) {
+        fprintf(stderr, "[j2me] http 请求失败\n");
         return r;
     }
 
-    /* 打包响应 */
-    NSString* msgStr = [NSHTTPURLResponse localizedStringForStatusCode:httpResp.statusCode];
-    NSData* msgData = [msgStr dataUsingEncoding:NSUTF8StringEncoding];
-    NSMutableData* hdrData = [NSMutableData data];
-    for (NSString* k in httpResp.allHeaderFields) {
-        NSString* v = [httpResp.allHeaderFields objectForKey:k];
-        [hdrData appendData:[[NSString stringWithFormat:@"%@: %@\r\n", k, v]
-            dataUsingEncoding:NSUTF8StringEncoding]];
-    }
-    NSUInteger msgLen = [msgData length];
-    NSUInteger hdrLen = [hdrData length];
-    NSUInteger bodyLen = [respData length];
-    NSUInteger total = 2 + 2 + msgLen + 4 + hdrLen + 4 + bodyLen;
+    size_t msgLen = hr.msg ? strlen(hr.msg) : 0;
+    size_t hdrLen = hr.headers ? strlen(hr.headers) : 0;
+    size_t total = 2 + 2 + msgLen + 4 + hdrLen + 4 + hr.bodyLen;
 
     t->gcDisable++;
     ArrayObject* out = vmNewTypeArray(t, EK_BYTE, (int32_t)total);
     t->gcDisable--;
-    if (!out) return r;
+    if (!out) { httpIosFree(&hr); return r; }
     uint8_t* p = (uint8_t*)ARRAY_DATA(out);
-    int code = (int)httpResp.statusCode;
-    *p++ = (uint8_t)(code >> 8); *p++ = (uint8_t)code;
+    *p++ = (uint8_t)(hr.code >> 8); *p++ = (uint8_t)hr.code;
     *p++ = (uint8_t)(msgLen >> 8); *p++ = (uint8_t)msgLen;
-    memcpy(p, [msgData bytes], msgLen); p += msgLen;
+    memcpy(p, hr.msg ? hr.msg : "", msgLen); p += msgLen;
     uint32_t hl = (uint32_t)hdrLen;
     *p++ = (uint8_t)(hl >> 24); *p++ = (uint8_t)(hl >> 16);
     *p++ = (uint8_t)(hl >> 8);  *p++ = (uint8_t)hl;
-    memcpy(p, [hdrData bytes], hdrLen); p += hdrLen;
-    uint32_t bl = (uint32_t)bodyLen;
+    memcpy(p, hr.headers ? hr.headers : "", hdrLen); p += hdrLen;
+    uint32_t bl = (uint32_t)hr.bodyLen;
     *p++ = (uint8_t)(bl >> 24); *p++ = (uint8_t)(bl >> 16);
     *p++ = (uint8_t)(bl >> 8);  *p++ = (uint8_t)bl;
-    if (bodyLen) memcpy(p, [respData bytes], bodyLen);
+    if (hr.bodyLen) memcpy(p, hr.body, hr.bodyLen);
+    httpIosFree(&hr);
 
     r.ref = JREF((Object*)out);
     return r;
-    } /* @autoreleasepool */
 }
 
 static void registerPlatformNatives(void) {
@@ -209,9 +168,8 @@ static void registerPlatformNatives(void) {
                      "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;[B)[B", n_httpExecute);
 }
 
-/* ============ manifest 解析 ============ */
+/* ============ manifest 解析（已在 Windows parse_mf_test 验证） ============ */
 
-/* 从 manifest 文本取属性值（键不分大小写），写入 out（cap 字节），成功返回 1 */
 static int manifestGet(const char* text, const char* key, char* out, size_t cap) {
     char pattern[64];
     snprintf(pattern, sizeof(pattern), "%s:", key);
@@ -227,7 +185,6 @@ static int manifestGet(const char* text, const char* key, char* out, size_t cap)
             if (vl >= cap) vl = cap - 1;
             memcpy(out, v, vl);
             out[vl] = 0;
-            /* 去尾部空白 */
             for (char* e = out + vl - 1; e >= out && (*e == ' ' || *e == '\r' || *e == '\t'); e--) *e = 0;
             return 1;
         }
@@ -241,16 +198,13 @@ static int parseMidlet1(const char* text, char* name, size_t nameCap,
                         char* cls, size_t clsCap) {
     char m1[512] = {0};
     if (!manifestGet(text, "MIDlet-1", m1, sizeof(m1))) return 0;
-    /* 三段逗号分割 */
     const char* p1 = strchr(m1, ',');
     if (!p1) return 0;
     const char* p2 = strchr(p1 + 1, ',');
     if (!p2) return 0;
-    /* name = m1..p1 */
     size_t nl = (size_t)(p1 - m1);
     if (nl >= nameCap) nl = nameCap - 1;
     memcpy(name, m1, nl); name[nl] = 0;
-    /* class = p2+1.. 修剪空白与 ./ 前缀 */
     const char* cs = p2 + 1;
     while (*cs == ' ') cs++;
     if (cs[0] == '.' && cs[1] == '/') cs += 2;
@@ -258,7 +212,6 @@ static int parseMidlet1(const char* text, char* name, size_t nameCap,
     while (cl > 0 && (cs[cl-1] == ' ' || cs[cl-1] == '\r')) cl--;
     if (cl == 0 || cl >= clsCap) return 0;
     memcpy(cls, cs, cl); cls[cl] = 0;
-    /* 点分名 -> 斜杠名 */
     for (char* q = cls; *q; q++) if (*q == '.') *q = '/';
     return 1;
 }
@@ -285,7 +238,7 @@ static void printException(VMThread* t, const char* where) {
 
 /* ============ 公共 API ============ */
 
-int j2meStart(const char* gameJarPath, const char* rmsDir,
+int j2meStart(const char* midpJarPath, const char* gameJarPath, const char* rmsDir,
               int screenW, int screenH) {
     gRunning = 0;
     gLastError[0] = 0;
@@ -293,17 +246,19 @@ int j2meStart(const char* gameJarPath, const char* rmsDir,
     gMainClass[0] = 0;
     gThread = NULL;
     gMidlet = NULL;
-    gDispCls = gCanvasCls = NULL;
+    gDispCls = NULL;
+    gCanvasCls = NULL;
     gFCur = gFBuf = gFW = gFH = NULL;
 
-    /* 内置 midp.jar */
-    NSString* midpPath = [[NSBundle mainBundle] pathForResource:@"midp" ofType:@"jar"];
-    if (!midpPath) { setErr("内置 midp.jar 缺失"); return 1; }
-    if (vmInit(midpPath.UTF8String) != 0) { setErr("VM 初始化失败"); return 1; }
+    if (!midpJarPath || vmInit(midpJarPath) != 0) { setErr("VM 初始化失败（midp.jar 缺失）"); return 1; }
     vmSetPlatformHooks(&gHooks);
-    if (vmAddJar(gameJarPath) != 0) { setErr("游戏 jar 加载失败（文件损坏?）"); vmShutdown(); return 1; }
+    if (gameJarPath && vmAddJar(gameJarPath) != 0) {
+        setErr("游戏 jar 加载失败（文件损坏?）");
+        vmShutdown();
+        return 1;
+    }
 
-    bridgeSetRmsDir(rmsDir);
+    bridgeSetRmsDir(rmsDir ? rmsDir : "");
     bridgeRegisterCommonNatives();
     registerPlatformNatives();
     gThread = vmCurrentThread();
@@ -319,10 +274,6 @@ int j2meStart(const char* gameJarPath, const char* rmsDir,
     free(mf);
     char name[128] = {0}, cls[256] = {0};
     int ok = parseMidlet1(text, name, sizeof(name), cls, sizeof(cls));
-    if (!ok) {
-        /* 无 MIDlet-1 时退回 MIDlet-Jar-URL 风格主类？J2ME 规范必须有 MIDlet-n */
-        manifestGet(text, "MIDlet-Name", name, sizeof(name));
-    }
     free(text);
     if (!ok) { setErr("不是有效的 J2ME 应用（缺少 MIDlet-1 属性）"); vmShutdown(); return 1; }
     snprintf(gMidletName, sizeof(gMidletName), "%s", name[0] ? name : "MIDlet");
@@ -364,7 +315,7 @@ int j2meStart(const char* gameJarPath, const char* rmsDir,
         printException(gThread, "startApp"); vmShutdown(); return 2;
     }
     gRunning = 1;
-    NSLog(@"[j2me] %s 已启动（主类 %s）", gMidletName, cls);
+    fprintf(stderr, "[j2me] %s 已启动（主类 %s）\n", gMidletName, cls);
     return 0;
 }
 
@@ -383,7 +334,7 @@ const uint32_t* j2meFrame(int* w, int* h) {
     }
     /* 读 Canvas 像素缓冲 */
     Slot* fl = (Slot*)(cur + 1);
-    ArrayObject* buf = (gFBuf && cur) ? (ArrayObject*)UNREF(fl[gFBuf->slot].ref) : NULL;
+    ArrayObject* buf = gFBuf ? (ArrayObject*)UNREF(fl[gFBuf->slot].ref) : NULL;
     int cw = gFW ? (int)fl[gFW->slot].i : 0;
     int ch = gFH ? (int)fl[gFH->slot].i : 0;
     if (!buf || cw <= 0 || ch <= 0) return &dummy;
@@ -437,7 +388,7 @@ void j2meDestroy(void) {
     gThread = NULL;
     gMidlet = NULL;
     vmShutdown();
-    NSLog(@"[j2me] 已销毁");
+    fprintf(stderr, "[j2me] 已销毁\n");
 }
 
 int         j2meIsRunning(void)    { return gRunning; }

@@ -12,10 +12,11 @@ extern "C" {
 #endif
 
 /* 启动 MIDlet：加载 game jar、解析 manifest 取主类、执行 <init> + startApp。
+ * midpJarPath: 内置 API jar（NSBundle 里的 midp.jar 路径）。
  * rmsDir: 本游戏独立存档目录（调用方保证每游戏唯一）。
  * screenW/H: Canvas 逻辑分辨率（240x320）。
  * 返回 0 成功，非 0 失败（j2meLastError 取原因） */
-int  j2meStart(const char* gameJarPath, const char* rmsDir,
+int  j2meStart(const char* midpJarPath, const char* gameJarPath, const char* rmsDir,
                int screenW, int screenH);
 
 /* 帧驱动：执行当前 Canvas 的 doFrame()（dirty 则 paint）。

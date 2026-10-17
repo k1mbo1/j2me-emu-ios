@@ -36,3 +36,8 @@ targets:
         IPHONEOS_DEPLOYMENT_TARGET: "13.0"
         HEADER_SEARCH_PATHS: ["App", "VM", "Bridge"]
         OTHER_LDFLAGS: ["-ObjC"]
+    dependencies:
+      - sdk: AudioToolbox.framework
+      - sdk: GameController.framework
+      - sdk: Foundation.framework
+      - sdk: UIKit.framework

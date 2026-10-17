@@ -158,7 +158,9 @@ static double gKeyLastRep[256];
     [self layoutAll];
 
     /* 启动 MIDlet */
-    int rc = j2meStart(self.jarPath.UTF8String, self.rmsDir.UTF8String, 240, 320);
+    NSString* midpPath = [[NSBundle mainBundle] pathForResource:@"midp" ofType:@"jar"];
+    int rc = j2meStart(midpPath.UTF8String, self.jarPath.UTF8String,
+                       self.rmsDir.UTF8String, 240, 320);
     if (rc != 0) {
         [self fatalAlert:[NSString stringWithUTF8String:j2meLastError()]];
         return;
@@ -374,7 +376,9 @@ static double gKeyLastRep[256];
 - (void)restartGame {
     j2meDestroy();
     memset(gKeyHeld, 0, sizeof(gKeyHeld));
-    int rc = j2meStart(self.jarPath.UTF8String, self.rmsDir.UTF8String, 240, 320);
+    NSString* midpPath = [[NSBundle mainBundle] pathForResource:@"midp" ofType:@"jar"];
+    int rc = j2meStart(midpPath.UTF8String, self.jarPath.UTF8String,
+                       self.rmsDir.UTF8String, 240, 320);
     if (rc != 0) {
         [self fatalAlert:[NSString stringWithUTF8String:j2meLastError()]];
         return;
