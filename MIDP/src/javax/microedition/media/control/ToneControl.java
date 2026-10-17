@@ -1,6 +1,8 @@
-package javax.microedition.media;
+package javax.microedition.media.control;
 
-/* ToneControl: 单音音序控制（配 device://tone Player） */
+import javax.microedition.media.Control;
+
+/* ToneControl（JSR-135 标准包名）：单音音序控制（配 device://tone Player） */
 public interface ToneControl extends Control {
     byte VERSION     = -2;
     byte BLOCK_START = -3;

@@ -60,6 +60,19 @@ static inline int32_t rd32(const uint8_t* p) {
 
 /* ============ 异常 ============ */
 
+/* 常量池条目（Class/Fieldref/Methodref/InterfaceMethodref）对应的类名。
+ * 用于 NoClassDefFoundError 的 message，便于定位游戏缺哪个 API 类。 */
+static const char* cpRefClassName(Class* self, CpEntry* e) {
+    if (e->tag == 9 || e->tag == 10 || e->tag == 11) {
+        if (e->idx1 == 0 || e->idx1 >= (uint16_t)self->nCp) return "?";
+        e = &self->cp[e->idx1];
+    }
+    if (e->tag != 7 || e->idx1 == 0 || e->idx1 >= (uint16_t)self->nCp) return "?";
+    if (self->cp[e->idx1].tag != 1) return "?";
+    char* n = self->cp[e->idx1].utf8;
+    return (n && *n) ? n : "?";
+}
+
 void vmThrowObject(VMThread* t, Object* exc) {
     if (!exc || t->exc) return;
     t->exc = exc;
@@ -322,7 +335,7 @@ void interpRun(VMThread* t) {
                 PUSH_REF(JREF(s));
             } else if (e->tag == 7) {
                 Class* c = cpClass(t, e, m->clazz);
-                if (!c) { vmThrow(t, "java/lang/NoClassDefFoundError", NULL); break; }
+                if (!c) { vmThrow(t, "java/lang/NoClassDefFoundError", cpRefClassName(m->clazz, e)); break; }
                 Object* co = vmGetClassObj(t, c);
                 if (!co) { vmThrow(t, "java/lang/OutOfMemoryError", NULL); break; }
                 PUSH_REF(JREF(co));
@@ -657,7 +670,7 @@ void interpRun(VMThread* t) {
             uint16_t idx = (uint16_t)((code[f->pc] << 8) | code[f->pc+1]); f->pc += 2;
             CpEntry* e = &m->clazz->cp[idx];
             Class* c = cpClass(t, e, m->clazz);
-            if (!c || c->isArray) { vmThrow(t, "java/lang/NoClassDefFoundError", NULL); break; }
+            if (!c || c->isArray) { vmThrow(t, "java/lang/NoClassDefFoundError", c ? c->name : cpRefClassName(m->clazz, e)); break; }
             if (cfInitClass(t, c) != 0) {
                 if (!vmHasException(t)) vmThrow(t, "java/lang/ExceptionInInitializerError", NULL);
                 break;
@@ -683,7 +696,7 @@ void interpRun(VMThread* t) {
             if (n < 0) { vmThrow(t, "java/lang/NegativeArraySizeException", NULL); break; }
             CpEntry* e = &m->clazz->cp[idx];
             Class* ec = cpClass(t, e, m->clazz);
-            if (!ec) { vmThrow(t, "java/lang/NoClassDefFoundError", NULL); break; }
+            if (!ec) { vmThrow(t, "java/lang/NoClassDefFoundError", cpRefClassName(m->clazz, e)); break; }
             Class* ac;
             if (ec->isArray) {
                 char buf[600];
@@ -716,7 +729,7 @@ void interpRun(VMThread* t) {
             if (o) {
                 CpEntry* e = &m->clazz->cp[idx];
                 Class* c = cpClass(t, e, m->clazz);
-                if (!c) { vmThrow(t, "java/lang/NoClassDefFoundError", NULL); break; }
+                if (!c) { vmThrow(t, "java/lang/NoClassDefFoundError", cpRefClassName(m->clazz, e)); break; }
                 if (!vmIsSubclass(o->clazz, c)) { vmThrow(t, "java/lang/ClassCastException", c->name); break; }
             }
             break; }
@@ -784,7 +797,7 @@ void interpRun(VMThread* t) {
             if (bad) break;
             CpEntry* e = &m->clazz->cp[idx];
             Class* ac = cpClass(t, e, m->clazz);
-            if (!ac) { vmThrow(t, "java/lang/NoClassDefFoundError", NULL); break; }
+            if (!ac) { vmThrow(t, "java/lang/NoClassDefFoundError", cpRefClassName(m->clazz, e)); break; }
             heapMaybeGC(t);
             Object* o = buildMultiArray(t, ac, dims, 0);
             PUSH_REF(JREF(o));

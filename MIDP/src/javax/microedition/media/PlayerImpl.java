@@ -1,6 +1,8 @@
 package javax.microedition.media;
 
 import java.util.Vector;
+import javax.microedition.media.control.ToneControl;
+import javax.microedition.media.control.VolumeControl;
 
 /**
  * PlayerImpl: JSR-135 状态机实现。

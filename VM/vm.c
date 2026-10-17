@@ -621,8 +621,8 @@ static Slot n_classForName(VMThread* t, Slot* a) {
     for (char* p = n; *p; p++)
         if (*p == '.') *p = '/';
     Class* c = (n[0] == '[') ? vmFindArrayClass(n) : vmFindClass(n);
+    if (!c) { vmThrow(t, "java/lang/ClassNotFoundException", n); free(n); return r; }
     free(n);
-    if (!c) { vmThrow(t, "java/lang/ClassNotFoundException", NULL); return r; }
     r.ref = JREF(vmGetClassObj(t, c));
     return r;
 }

@@ -5,8 +5,8 @@ import javax.microedition.media.Manager;
 import javax.microedition.media.MediaException;
 import javax.microedition.media.Player;
 import javax.microedition.media.PlayerListener;
-import javax.microedition.media.ToneControl;
-import javax.microedition.media.VolumeControl;
+import javax.microedition.media.control.ToneControl;
+import javax.microedition.media.control.VolumeControl;
 
 /* MediaTest - MMAPI 链路验证（headless 媒体平台落盘 WAV）
  * 覆盖: playTone / WAV Player 状态机 / VolumeControl / ToneControl 音序 /

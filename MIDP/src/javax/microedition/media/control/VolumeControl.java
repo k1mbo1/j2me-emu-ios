@@ -1,6 +1,8 @@
-package javax.microedition.media;
+package javax.microedition.media.control;
 
-/* VolumeControl: 音量控制（0-100） */
+import javax.microedition.media.Control;
+
+/* VolumeControl（JSR-135 标准包名）：音量控制（0-100） */
 public interface VolumeControl extends Control {
     void setLevel(int level);
     int getLevel();
