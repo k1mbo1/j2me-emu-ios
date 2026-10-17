@@ -1,0 +1,74 @@
+name: build-ipa
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Decode app icon
+        run: |
+          mkdir -p App/Resources/Assets.xcassets/AppIcon.appiconset
+          cp tools/appicon/Contents.json App/Resources/Assets.xcassets/AppIcon.appiconset/
+          cp tools/appicon/Assets.json App/Resources/Assets.xcassets/Contents.json
+          base64 -D -i tools/appicon/icon1024.b64 -o App/Resources/Assets.xcassets/AppIcon.appiconset/icon1024.png
+
+      - name: Build MIDP API jar
+        run: |
+          cd MIDP
+          mkdir -p classes
+          find src -name "*.java" > sources.txt
+          javac -source 8 -target 8 -encoding UTF-8 -nowarn -d classes @sources.txt
+          jar cf midp.jar -C classes .
+          cd ..
+          mkdir -p BuiltAssets
+          cp MIDP/midp.jar BuiltAssets/
+
+      - name: Build sample game jar
+        run: |
+          cd tools
+          mkdir -p classes
+          javac -source 8 -target 8 -encoding UTF-8 -nowarn -cp ../MIDP/midp.jar -d classes test/SnakeGame.java
+          jar cfm snake.jar manifest.mf -C classes .
+          cd ..
+          cp tools/snake.jar BuiltAssets/
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build unsigned app
+        run: |
+          xcodebuild -project J2MEEmu.xcodeproj -scheme J2MEEmu -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY='' AD_HOC_CODE_SIGNING_ALLOWED=NO -derivedDataPath build build
+
+      - name: Package ipa
+        run: |
+          mkdir -p Payload
+          cp -r "build/Build/Products/Release-iphoneos/J2MEEmu.app" Payload/
+          zip -qry J2MEEmu.ipa Payload
+          ls -la J2MEEmu.ipa
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: J2MEEmu-ipa
+          path: J2MEEmu.ipa
+
+      - name: Create release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: J2MEEmu.ipa
+          generate_release_notes: false

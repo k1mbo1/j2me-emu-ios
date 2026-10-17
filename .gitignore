@@ -1,0 +1,17 @@
+# build outputs
+build/
+BuiltAssets/
+MIDP/classes/
+MIDP/midp.jar
+tools/classes/
+tools/snake.jar
+tools/appicon/icon1024.png
+
+# Xcode
+*.xcodeproj
+xcuserdata/
+App/Resources/
+
+# misc
+.DS_Store
+*.log
