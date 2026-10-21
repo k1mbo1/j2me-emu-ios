@@ -1,0 +1,99 @@
+name: e2e-sim
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  e2e:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install xcodegen
+        run: brew install xcodegen
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Decode app icon
+        run: |
+          mkdir -p App/Resources/Assets.xcassets/AppIcon.appiconset
+          cp tools/appicon/Contents.json App/Resources/Assets.xcassets/AppIcon.appiconset/
+          cp tools/appicon/Assets.json App/Resources/Assets.xcassets/Contents.json
+          base64 -D -i tools/appicon/icon1024.b64 -o App/Resources/Assets.xcassets/AppIcon.appiconset/icon1024.png
+
+      - name: Build MIDP API jar
+        run: |
+          cd MIDP
+          mkdir -p classes
+          find src -name "*.java" > sources.txt
+          javac -source 8 -target 8 -encoding UTF-8 -nowarn -d classes @sources.txt
+          jar cf midp.jar -C classes .
+          cd ..
+          mkdir -p BuiltAssets
+          cp MIDP/midp.jar BuiltAssets/
+
+      - name: Build sample game jar
+        run: |
+          cd tools
+          mkdir -p classes
+          javac -source 8 -target 8 -encoding UTF-8 -nowarn -cp ../MIDP/midp.jar -d classes test/SnakeGame.java
+          jar cfm snake.jar manifest.mf -C classes .
+          ls -la classes/
+          cd ..
+          cp tools/snake.jar BuiltAssets/
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Build simulator app
+        run: |
+          xcodebuild -project J2MEEmu.xcodeproj -scheme J2MEEmu -configuration Release \
+            -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO -derivedDataPath build build 2>&1 | tail -30
+
+      - name: Boot simulator & install app
+        run: |
+          set -e
+          DEV=$(xcrun simctl list devices available | grep -m1 iPhone | grep -oE '[A-F0-9-]{36}')
+          echo "device=$DEV"
+          xcrun simctl boot "$DEV" || true
+          xcrun simctl bootstatus "$DEV" -b
+          xcrun simctl install booted build/Build/Products/Release-iphonesimulator/J2MEEmu.app
+          echo "INSTALLED"
+          xcrun simctl listapps booted | grep -A2 j2me || true
+
+      - name: Simulate user importing a jar
+        run: |
+          set -e
+          DATA=$(xcrun simctl get_app_container booted com.j2me.emu data)
+          echo "container=$DATA"
+          mkdir -p "$DATA/Documents/games"
+          cp tools/snake.jar "$DATA/Documents/games/MyImport.jar"
+          ls -la "$DATA/Documents/games/"
+
+      - name: Launch app & verify alive & screenshots
+        run: |
+          set -e
+          echo "launching..."
+          xcrun simctl launch booted com.j2me.emu
+          sleep 4
+          echo "--- process check 1 ---"
+          ps aux | grep "J2MEEmu.app" | grep -v grep || echo "APP DEAD at t=4s"
+          xcrun simctl io booted screenshot shot1.png
+          sleep 4
+          echo "--- process check 2 ---"
+          ps aux | grep "J2MEEmu.app" | grep -v grep || echo "APP DEAD at t=8s"
+          xcrun simctl io booted screenshot shot2.png
+
+      - name: Upload screenshots
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-screenshots
+          path: |
+            shot1.png
+            shot2.png
