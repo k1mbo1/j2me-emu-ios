@@ -52,6 +52,7 @@ jobs:
 
       - name: Build simulator app
         run: |
+          set -e -o pipefail
           xcodebuild -project J2MEEmu.xcodeproj -scheme J2MEEmu -configuration Release \
             -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' \
             CODE_SIGNING_ALLOWED=NO -derivedDataPath build build 2>&1 | tail -30
