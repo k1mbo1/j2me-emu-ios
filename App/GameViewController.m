@@ -559,7 +559,7 @@ static double gKeyLastRep[256];
 /* ============ 截图（当前帧 -> 相册） ============ */
 
 - (void)doScreenshot {
-    CGImageRef img = (CGImageRef)self.gameView.layer.contents;
+    CGImageRef img = (__bridge CGImageRef)self.gameView.layer.contents;
     if (!img) {
         [self showOsd:@"画面尚未就绪，稍后再试"];
         return;
