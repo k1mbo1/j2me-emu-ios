@@ -170,6 +170,20 @@ Object* cpString(VMThread* t, CpEntry* e, Class* self) {
     return s;
 }
 
+/* 接口层级递归查找（接口可 extends 接口，任意深度） */
+static Method* findIfaceMethodDeep(Class* iface, const char* name, const char* desc) {
+    if (!iface) return NULL;
+    Method* m = vmFindMethodImpl(iface, name, desc);
+    if (m) return m;
+    if (iface->ifaces) {
+        for (int i = 0; i < iface->nIfaces; i++) {
+            m = findIfaceMethodDeep(iface->ifaces[i], name, desc);
+            if (m) return m;
+        }
+    }
+    return NULL;
+}
+
 Method* cpMethod(VMThread* t, CpEntry* e, Class* self) {
     (void)t;
     if (e->resolved) return (Method*)e->resolved;
@@ -182,7 +196,7 @@ Method* cpMethod(VMThread* t, CpEntry* e, Class* self) {
     Method* m = vmFindMethodImpl(owner, mname, mdesc);
     if (!m && owner->ifaces) {
         for (int i = 0; i < owner->nIfaces && !m; i++)
-            m = vmFindMethodImpl(owner->ifaces[i], mname, mdesc);
+            m = findIfaceMethodDeep(owner->ifaces[i], mname, mdesc);
     }
     if (!m && vmG.clsObject && owner != vmG.clsObject)
         m = vmFindMethodImpl(vmG.clsObject, mname, mdesc);

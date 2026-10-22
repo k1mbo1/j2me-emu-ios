@@ -7,6 +7,10 @@
 - (BOOL)application:(UIApplication*)application
  didFinishLaunchingWithOptions:(NSDictionary*)launchOptions {
     self.window = [[UIWindow alloc] initWithFrame:[UIScreen mainScreen].bounds];
+    /* 全局深色主题（游戏机风格，列表/弹窗自动跟随） */
+    if (@available(iOS 13.0, *)) {
+        self.window.overrideUserInterfaceStyle = UIUserInterfaceStyleDark;
+    }
     self.window.rootViewController = [[UINavigationController alloc]
         initWithRootViewController:[[LibraryViewController alloc] initWithStyle:UITableViewStylePlain]];
     [self.window makeKeyAndVisible];

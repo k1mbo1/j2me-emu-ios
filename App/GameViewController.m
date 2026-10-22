@@ -1,7 +1,9 @@
 /* GameViewController.m - 全屏游戏页：DisplayLink 帧驱动 + 分离式虚拟键盘 + 蓝牙手柄 + 暂停菜单
+ * v1.0.3 新增：缩放档位（适应/1x/2x/3x，双击画面切换）、OSD 提示、
+ *             暂停菜单扩展（键盘/缩放/音量/截图/重启/回库）、音量弹窗、截图保存相册、横屏支持。
  * 布局（分离式，键盘不遮挡画面）:
  *   [导航栏: 返回 | 游戏名 | 键盘切换/暂停]
- *   [        GameView（aspect-fit 最近邻缩放）        ]
+ *   [        GameView（最近邻缩放，档位可切）        ]
  *   [  左:方向十字+FIRE   右:数字块 1 3 / 7 9 / * 0   ]
  */
 #import "GameViewController.h"
@@ -111,6 +113,11 @@ static void releasePixels(void* info, const void* data, size_t size) {
 @property (nonatomic, strong) CADisplayLink* displayLink;
 @property (nonatomic, assign) BOOL padVisible;
 @property (nonatomic, assign) BOOL paused;
+@property (nonatomic, assign) int  scaleMode;      /* 0=适应 1/2/3=倍率档 */
+@property (nonatomic, assign) CGFloat lastScale;  /* 当前实际生效倍率（OSD 显示用） */
+@property (nonatomic, strong) UILabel* osdLabel;
+@property (nonatomic, assign) double osdUntil;
+@property (nonatomic, assign) BOOL  osdHiding;
 @end
 
 /* 按住重复状态（keycode -> 时间戳，0=未按） */
@@ -126,6 +133,7 @@ static double gKeyLastRep[256];
         _gameName = gameName;
         _rmsDir = rmsDir;
         _padVisible = YES;
+        _scaleMode = 0;
     }
     return self;
 }
@@ -149,11 +157,29 @@ static double gKeyLastRep[256];
     _gameView.translatesAutoresizingMaskIntoConstraints = NO;
     [self.view addSubview:_gameView];
 
+    /* 双击画面 = 切换缩放档位 */
+    UITapGestureRecognizer* dbl = [[UITapGestureRecognizer alloc]
+        initWithTarget:self action:@selector(cycleScale:)];
+    dbl.numberOfTapsRequired = 2;
+    [_gameView addGestureRecognizer:dbl];
+
     /* 虚拟键盘（分离式底部区） */
     [self buildKeyPad];
     _keyPad.translatesAutoresizingMaskIntoConstraints = NO;
     [self.view addSubview:_keyPad];
     _keyPad.hidden = NO;
+
+    /* OSD 提示条（懒创建，layoutAll 定位） */
+    _osdLabel = [[UILabel alloc] initWithFrame:CGRectZero];
+    _osdLabel.font = [UIFont boldSystemFontOfSize:14];
+    _osdLabel.textColor = [UIColor whiteColor];
+    _osdLabel.backgroundColor = [UIColor colorWithWhite:0 alpha:0.65];
+    _osdLabel.textAlignment = NSTextAlignmentCenter;
+    _osdLabel.layer.cornerRadius = 12;
+    _osdLabel.clipsToBounds = YES;
+    _osdLabel.hidden = YES;
+    _osdLabel.alpha = 0;
+    [self.view addSubview:_osdLabel];
 
     [self layoutAll];
 
@@ -165,6 +191,10 @@ static double gKeyLastRep[256];
         [self fatalAlert:[NSString stringWithUTF8String:j2meLastError()]];
         return;
     }
+
+    /* 顶栏换成 manifest 里的 MIDlet 显示名 */
+    const char* mn = j2meMidletName();
+    if (mn && mn[0]) self.navigationItem.title = [NSString stringWithUTF8String:mn];
 
     /* 帧驱动 */
     _displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(tick:)];
@@ -178,6 +208,9 @@ static double gKeyLastRep[256];
         name:UIApplicationDidEnterBackgroundNotification object:nil];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onEnterForeground)
         name:UIApplicationWillEnterForegroundNotification object:nil];
+
+    /* 启动操作提示 */
+    [self showOsd:@"双击画面切换缩放 · 暂停键打开菜单"];
 }
 
 - (void)dealloc {
@@ -194,10 +227,13 @@ static double gKeyLastRep[256];
     CGFloat padH = 196.0;
 
     CGRect gameRect = CGRectMake(0, top, vb.size.width, bottom - top - (self.padVisible ? padH : 0));
-    /* 逻辑分辨率 aspect-fit 居中（游戏可自设尺寸） */
+    /* 逻辑分辨率缩放：档位 0=aspect-fit 适应；1/2/3=整数倍（超屏时降为适应，避免裁剪） */
     CGSize gs = _gameView.gameSize;
     if (gs.width < 1 || gs.height < 1) gs = CGSizeMake(240, 320);
-    CGFloat scale = MIN(gameRect.size.width / gs.width, gameRect.size.height / gs.height);
+    CGFloat fit = MIN(gameRect.size.width / gs.width, gameRect.size.height / gs.height);
+    CGFloat scale = fit;
+    if (self.scaleMode > 0) scale = MIN((CGFloat)self.scaleMode, fit);
+    self.lastScale = scale;
     CGFloat gw = gs.width * scale, gh = gs.height * scale;
     _gameView.frame = CGRectMake(gameRect.origin.x + (gameRect.size.width - gw) / 2,
                                  gameRect.origin.y + (gameRect.size.height - gh) / 2,
@@ -213,6 +249,16 @@ static double gKeyLastRep[256];
     } else {
         _keyPad.frame = CGRectMake(0, vb.size.height, vb.size.width, padH);
     }
+
+    /* OSD 定位：画面顶部居中 */
+    if (_osdLabel) {
+        [_osdLabel sizeToFit];
+        CGRect of = _osdLabel.frame;
+        of.size.width += 28;
+        of.size.height = 30;
+        _osdLabel.frame = CGRectMake(gameRect.origin.x + (gameRect.size.width - of.size.width) / 2,
+                                     gameRect.origin.y + 10, of.size.width, of.size.height);
+    }
 }
 
 - (void)viewDidLayoutSubviews {
@@ -222,6 +268,11 @@ static double gKeyLastRep[256];
 
 - (BOOL)prefersStatusBarHidden { return YES; }
 - (BOOL)prefersHomeIndicatorAutoHidden { return YES; }
+
+/* 横竖屏自由旋转（倒屏除外） */
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
+    return UIInterfaceOrientationMaskAllButUpsideDown;
+}
 
 /* ============ 虚拟键盘（分离式） ============ */
 
@@ -297,11 +348,45 @@ static double gKeyLastRep[256];
     }
 }
 
+/* ============ OSD 提示 ============ */
+
+- (void)showOsd:(NSString*)text {
+    if (!_osdLabel) return;
+    _osdLabel.text = text;
+    _osdLabel.hidden = NO;
+    _osdHiding = NO;
+    [UIView animateWithDuration:0.15 animations:^{
+        self->_osdLabel.alpha = 1;
+    }];
+    _osdUntil = CACurrentMediaTime() + 2.0;
+}
+
+- (void)osdTick:(double)now {
+    if (!_osdLabel || _osdLabel.hidden || _osdHiding) return;
+    if (now > _osdUntil) {
+        _osdHiding = YES;
+        [UIView animateWithDuration:0.4 animations:^{
+            self->_osdLabel.alpha = 0;
+        } completion:^(BOOL f) {
+            self->_osdLabel.hidden = YES;
+            self->_osdHiding = NO;
+        }];
+    }
+}
+
+/* ============ 缩放档位 ============ */
+
+- (void)cycleScale:(id)sender {
+    self.scaleMode = (self.scaleMode + 1) % 4;
+    [self layoutAll];
+    [self showOsd:[NSString stringWithFormat:@"缩放：%.1fx", self.lastScale]];
+}
+
 /* ============ 帧驱动 ============ */
 
 - (void)tick:(CADisplayLink*)link {
-    /* 按住重复（0.45s 后每 0.12s 一次） */
     double now = CACurrentMediaTime();
+    /* 按住重复（0.45s 后每 0.12s 一次） */
     for (int c = 0; c < 256; c++) {
         if (gKeyHeld[c] > 0 && now - gKeyHeld[c] > 0.45 &&
             (gKeyLastRep[c] == 0 || now - gKeyLastRep[c] > 0.12)) {
@@ -309,6 +394,7 @@ static double gKeyLastRep[256];
             j2meKey(c, 2);
         }
     }
+    [self osdTick:now];
     if (self.paused) return;
 
     int w = 0, h = 0;
@@ -327,7 +413,7 @@ static double gKeyLastRep[256];
     _displayLink = nil;
 }
 
-/* ============ 暂停 / 键盘切换 / 重启 / 退出 ============ */
+/* ============ 暂停 / 键盘切换 / 缩放 / 音量 / 截图 / 重启 / 退出 ============ */
 
 - (void)togglePad:(id)sender {
     self.padVisible = !self.padVisible;
@@ -339,25 +425,58 @@ static double gKeyLastRep[256];
 
 - (void)showPauseMenu:(id)sender {
     [self setPaused:YES];
-    UIAlertController* alert = [UIAlertController alertControllerWithTitle:self.gameName
-        message:nil preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"继续游戏" style:UIAlertActionStyleDefault
+    UIAlertController* sheet = [UIAlertController
+        alertControllerWithTitle:self.navigationItem.title
+        message:nil preferredStyle:UIAlertControllerStyleActionSheet];
+    [sheet addAction:[UIAlertAction actionWithTitle:@"继续游戏" style:UIAlertActionStyleDefault
         handler:^(UIAlertAction* a) { [self setPaused:NO]; }]];
+
     NSString* padTitle = self.padVisible ? @"隐藏虚拟键盘" : @"显示虚拟键盘";
-    [alert addAction:[UIAlertAction actionWithTitle:padTitle style:UIAlertActionStyleDefault
+    [sheet addAction:[UIAlertAction actionWithTitle:padTitle style:UIAlertActionStyleDefault
         handler:^(UIAlertAction* a) {
             self.padVisible = !self.padVisible;
             self.keyPad.hidden = NO;
             [UIView animateWithDuration:0.25 animations:^{ [self layoutAll]; }];
             [self setPaused:NO];
         }]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"重启游戏" style:UIAlertActionStyleDefault
+
+    [sheet addAction:[UIAlertAction actionWithTitle:@"切换缩放档位" style:UIAlertActionStyleDefault
+        handler:^(UIAlertAction* a) {
+            [self cycleScale:nil];
+            [self setPaused:NO];
+        }]];
+
+    [sheet addAction:[UIAlertAction
+        actionWithTitle:[NSString stringWithFormat:@"音量调节（当前 %d%%）", j2meVolume()]
+        style:UIAlertActionStyleDefault
+        handler:^(UIAlertAction* a) { [self showVolumeDialog]; }]];
+
+    [sheet addAction:[UIAlertAction actionWithTitle:@"截图保存到相册" style:UIAlertActionStyleDefault
+        handler:^(UIAlertAction* a) {
+            [self doScreenshot];
+            [self setPaused:NO];
+        }]];
+
+    [sheet addAction:[UIAlertAction actionWithTitle:@"重启游戏" style:UIAlertActionStyleDefault
         handler:^(UIAlertAction* a) { [self restartGame]; }]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"退出游戏" style:UIAlertActionStyleDestructive
+
+    [sheet addAction:[UIAlertAction actionWithTitle:@"返回游戏库" style:UIAlertActionStyleDestructive
         handler:^(UIAlertAction* a) { [self quitGame]; }]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel
+
+    [sheet addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel
         handler:^(UIAlertAction* a) { [self setPaused:NO]; }]];
-    [self presentViewController:alert animated:YES completion:nil];
+
+    /* iPad 弹出锚点 */
+    if (sheet.popoverPresentationController) {
+        if ([sender isKindOfClass:[UIBarButtonItem class]]) {
+            sheet.popoverPresentationController.barButtonItem = (UIBarButtonItem*)sender;
+        } else {
+            sheet.popoverPresentationController.sourceView = self.view;
+            sheet.popoverPresentationController.sourceRect =
+                CGRectMake(self.view.bounds.size.width / 2, 60, 1, 1);
+        }
+    }
+    [self presentViewController:sheet animated:YES completion:nil];
 }
 
 - (void)setPaused:(BOOL)p {
@@ -373,6 +492,90 @@ static double gKeyLastRep[256];
     }
 }
 
+/* ============ 音量弹窗（自定义卡片，实时生效） ============ */
+
+- (void)showVolumeDialog {
+    UIView* overlay = [[UIView alloc] initWithFrame:self.view.bounds];
+    overlay.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+    overlay.backgroundColor = [UIColor colorWithWhite:0 alpha:0.6];
+    overlay.tag = 9001;
+
+    UIView* card = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 300, 168)];
+    card.center = CGPointMake(overlay.bounds.size.width / 2, overlay.bounds.size.height / 2);
+    card.autoresizingMask = UIViewAutoresizingFlexibleLeftMargin | UIViewAutoresizingFlexibleRightMargin
+                          | UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleBottomMargin;
+    card.backgroundColor = [UIColor colorWithWhite:0.14 alpha:1];
+    card.layer.cornerRadius = 18;
+
+    UILabel* title = [[UILabel alloc] initWithFrame:CGRectMake(0, 18, 300, 24)];
+    title.text = @"音量";
+    title.textColor = [UIColor whiteColor];
+    title.font = [UIFont boldSystemFontOfSize:17];
+    title.textAlignment = NSTextAlignmentCenter;
+    [card addSubview:title];
+
+    UILabel* value = [[UILabel alloc] initWithFrame:CGRectMake(0, 48, 300, 22)];
+    value.text = [NSString stringWithFormat:@"%d%%", j2meVolume()];
+    value.textColor = [UIColor colorWithRed:0.4 green:0.8 blue:1 alpha:1];
+    value.font = [UIFont boldSystemFontOfSize:16];
+    value.textAlignment = NSTextAlignmentCenter;
+    value.tag = 9002;
+    [card addSubview:value];
+
+    UISlider* slider = [[UISlider alloc] initWithFrame:CGRectMake(28, 82, 300 - 56, 34)];
+    slider.minimumValue = 0;
+    slider.maximumValue = 100;
+    slider.value = j2meVolume();
+    [slider addTarget:self action:@selector(volumeChanged:)
+       forControlEvents:UIControlEventValueChanged];
+    [card addSubview:slider];
+
+    UIButton* done = [UIButton buttonWithType:UIButtonTypeSystem];
+    done.frame = CGRectMake(70, 122, 160, 36);
+    done.tintColor = [UIColor whiteColor];
+    done.backgroundColor = [UIColor colorWithWhite:0.28 alpha:1];
+    done.layer.cornerRadius = 10;
+    [done setTitle:@"完成" forState:UIControlStateNormal];
+    [done addTarget:self action:@selector(closeVolumeDialog)
+       forControlEvents:UIControlEventTouchUpInside];
+    [card addSubview:done];
+
+    [overlay addSubview:card];
+    [self.view addSubview:overlay];
+}
+
+- (void)volumeChanged:(UISlider*)s {
+    int v = (int)(s.value + 0.5);
+    j2meSetVolume(v);
+    UILabel* value = (UILabel*)[self.view viewWithTag:9002];
+    if (value) value.text = [NSString stringWithFormat:@"%d%%", v];
+}
+
+- (void)closeVolumeDialog {
+    [[self.view viewWithTag:9001] removeFromSuperview];
+    [self setPaused:NO];
+}
+
+/* ============ 截图（当前帧 -> 相册） ============ */
+
+- (void)doScreenshot {
+    CGImageRef img = (CGImageRef)self.gameView.layer.contents;
+    if (!img) {
+        [self showOsd:@"画面尚未就绪，稍后再试"];
+        return;
+    }
+    UIImage* ui = [UIImage imageWithCGImage:img];
+    UIImageWriteToSavedPhotosAlbum(ui, self,
+        @selector(image:didFinishSavingWithError:contextInfo:), nil);
+}
+
+- (void)image:(UIImage*)image didFinishSavingWithError:(NSError*)error contextInfo:(void*)c {
+    if (error) [self showOsd:@"保存失败：请在系统设置中允许写入相册"];
+    else       [self showOsd:@"截图已保存到相册"];
+}
+
+/* ============ 重启 / 退出 ============ */
+
 - (void)restartGame {
     j2meDestroy();
     memset(gKeyHeld, 0, sizeof(gKeyHeld));
@@ -383,11 +586,14 @@ static double gKeyLastRep[256];
         [self fatalAlert:[NSString stringWithUTF8String:j2meLastError()]];
         return;
     }
+    const char* mn = j2meMidletName();
+    if (mn && mn[0]) self.navigationItem.title = [NSString stringWithUTF8String:mn];
     _paused = NO;
     if (!_displayLink) {
         _displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(tick:)];
         [_displayLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
     }
+    [self showOsd:@"已重启"];
 }
 
 - (void)quitGame {

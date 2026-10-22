@@ -38,6 +38,14 @@ int         j2meIsRunning(void);
 const char* j2meLastError(void);
 const char* j2meMidletName(void);   /* manifest MIDlet-Name（未解析到则文件名） */
 
+/* 不启动 VM，直接读 jar manifest 的 MIDlet-1 显示名（游戏库列表用）。
+ * 成功返回 0 且 nameOut 填入显示名；失败返回非 0。 */
+int  j2mePeekManifest(const char* jarPath, char* nameOut, size_t cap);
+
+/* 全局媒体音量 0-100（MMAPI 所有播放器统一系数，游戏内设置与之相乘） */
+void j2meSetVolume(int vol);
+int  j2meVolume(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -10,6 +10,7 @@
 
 #include <stdarg.h>
 #include <AudioToolbox/AudioToolbox.h>
+#include "miniz/miniz.h"
 
 /* VM 层 zip.c 提供 */
 uint8_t* zipReadFile(const char* jarPath, const char* entryName, size_t* outLen);
@@ -422,3 +423,33 @@ void j2meDestroy(void) {
 int         j2meIsRunning(void)    { return gRunning; }
 const char* j2meLastError(void)    { return gLastError; }
 const char* j2meMidletName(void)   { return gMidletName; }
+
+/* 不启动 VM 直接读 jar 的 MIDlet-1 显示名（游戏库列表用，miniz 独立打开） */
+int j2mePeekManifest(const char* jarPath, char* nameOut, size_t cap) {
+    if (!jarPath || !nameOut || cap == 0) return -1;
+    nameOut[0] = 0;
+    mz_zip_archive zip;
+    memset(&zip, 0, sizeof(zip));
+    if (!mz_zip_reader_init_file(&zip, jarPath, 0)) return -1;
+    int idx = mz_zip_reader_locate_file(&zip, "META-INF/MANIFEST.MF", NULL, 0);
+    if (idx < 0) idx = mz_zip_reader_locate_file(&zip, "meta-inf/MANIFEST.MF", NULL, 0);
+    if (idx < 0) { mz_zip_reader_end(&zip); return -1; }
+    size_t sz = 0;
+    char* mf = (char*)mz_zip_reader_extract_to_heap(&zip, idx, &sz, 0);
+    mz_zip_reader_end(&zip);
+    if (!mf) return -1;
+    char* text = (char*)malloc(sz + 1);
+    if (!text) { free(mf); return -1; }
+    memcpy(text, mf, sz);
+    text[sz] = 0;
+    free(mf);
+    char name[128] = {0}, cls[256] = {0};
+    int ok = parseMidlet1(text, name, sizeof(name), cls, sizeof(cls));
+    free(text);
+    if (!ok || !name[0]) return -1;
+    snprintf(nameOut, cap, "%s", name);
+    return 0;
+}
+
+void j2meSetVolume(int vol) { audioIosSetMasterVolume(vol); }
+int  j2meVolume(void)       { return audioIosMasterVolume(); }

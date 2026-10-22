@@ -3,8 +3,12 @@ build/
 BuiltAssets/
 MIDP/classes/
 MIDP/midp.jar
+MIDP/sources.txt
 tools/classes/
 tools/snake.jar
+tools/mediatest.jar
+tools/headless.exe
+tools/test_run/
 tools/appicon/icon1024.png
 
 # Xcode

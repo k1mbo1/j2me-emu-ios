@@ -46,9 +46,17 @@ extern "C" {
 
 static WCHAR* mz_utf8z_to_widechar(const char* str)
 {
+  /* MINIZ_USE_ACP: Windows 壳传 ANSI(CP936) 路径时按 ACP 转换（PC 版）；
+   * 默认仍按 UTF-8（与 iOS/标准 miniz 行为一致） */
+#ifdef MINIZ_USE_ACP
+  int reqChars = MultiByteToWideChar(CP_ACP, 0, str, -1, NULL, 0);
+  WCHAR* wStr = (WCHAR*)malloc(reqChars * sizeof(WCHAR));
+  MultiByteToWideChar(CP_ACP, 0, str, -1, wStr, reqChars);
+#else
   int reqChars = MultiByteToWideChar(CP_UTF8, 0, str, -1, NULL, 0);
   WCHAR* wStr = (WCHAR*)malloc(reqChars * sizeof(WCHAR));
   MultiByteToWideChar(CP_UTF8, 0, str, -1, wStr, reqChars);
+#endif
   return wStr;
 }
 

@@ -13,6 +13,8 @@
 static NSMutableDictionary* gPlayers = nil;   /* NSNumber -> AVAudioPlayer */
 static NSMutableSet* gAutoClose = nil;
 static NSMutableSet* gPaused = nil;           /* PauseAll 暂停的句柄（ResumeAll 恢复） */
+static NSMutableDictionary* gVol = nil;       /* NSNumber -> NSNumber 游戏设置的音量(0-100) */
+static int gMaster = 100;                     /* 全局主音量系数 */
 static J2AudioDelegate* gDelegate = nil;
 static int gNextHandle = 1;
 static BOOL gSessionConfigured = NO;
@@ -27,6 +29,7 @@ static BOOL gSessionConfigured = NO;
     if (key && [gAutoClose containsObject:key]) {
         [gPlayers removeObjectForKey:key];
         [gAutoClose removeObject:key];
+        [gVol removeObjectForKey:key];
     }
 }
 @end
@@ -36,7 +39,18 @@ static void ensureInit(void) {
     gPlayers = [NSMutableDictionary new];
     gAutoClose = [NSMutableSet new];
     gPaused = [NSMutableSet new];
+    gVol = [NSMutableDictionary new];
     gDelegate = [J2AudioDelegate new];
+}
+
+/* 实际音量 = 游戏设置音量 x 主音量 */
+static void applyVolume(int h, AVAudioPlayer* p) {
+    int gameVol = [gVol[@(h)] intValue];
+    if (gameVol <= 0) gameVol = 100;
+    int m = gMaster;
+    if (m < 0) m = 0;
+    if (m > 100) m = 100;
+    p.volume = (float)gameVol / 100.0f * (float)m / 100.0f;
 }
 
 static void ensureSession(void) {
@@ -69,6 +83,7 @@ int audioIosCreate(const void* audioBytes, size_t len, int autoClose) {
     p.delegate = gDelegate;
     int h = gNextHandle++;
     gPlayers[@(h)] = p;
+    gVol[@(h)] = @100;
     if (autoClose) [gAutoClose addObject:@(h)];
     return h;
 }
@@ -93,6 +108,7 @@ void audioIosClose(int h) {
     [p stop];
     [gPlayers removeObjectForKey:@(h)];
     [gAutoClose removeObject:@(h)];
+    [gVol removeObjectForKey:@(h)];
 }
 
 int audioIosPrefetch(int h) {
@@ -106,13 +122,14 @@ void audioIosSetVolume(int h, int vol) {
     if (!p) return;
     if (vol < 0) vol = 0;
     if (vol > 100) vol = 100;
-    p.volume = (float)vol / 100.0f;
+    gVol[@(h)] = @(vol);
+    applyVolume(h, p);
 }
 
 int audioIosVolume(int h) {
     AVAudioPlayer* p = playerFor(h);
     if (!p) return -1;
-    return (int)(p.volume * 100.0f + 0.5f);
+    return [gVol[@(h)] intValue];
 }
 
 int audioIosState(int h) {
@@ -173,4 +190,20 @@ void audioIosStopAll(void) {
     }
     [gAutoClose removeAllObjects];
     [gPaused removeAllObjects];
+    [gVol removeAllObjects];
+}
+
+void audioIosSetMasterVolume(int vol) {
+    if (vol < 0) vol = 0;
+    if (vol > 100) vol = 100;
+    gMaster = vol;
+    if (!gPlayers) return;
+    for (NSNumber* k in gPlayers) {
+        AVAudioPlayer* p = gPlayers[k];
+        if (p) applyVolume(k.intValue, p);
+    }
+}
+
+int audioIosMasterVolume(void) {
+    return gMaster;
 }

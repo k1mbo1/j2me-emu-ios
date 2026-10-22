@@ -25,6 +25,10 @@ void audioIosPauseAll(void);        /* 暂停菜单 / 退后台 */
 void audioIosResumeAll(void);
 void audioIosStopAll(void);         /* 退出游戏 */
 
+/* 全局主音量 0-100（所有播放器的统一系数，与单个播放器音量相乘） */
+void audioIosSetMasterVolume(int vol);
+int  audioIosMasterVolume(void);
+
 #ifdef __cplusplus
 }
 #endif
