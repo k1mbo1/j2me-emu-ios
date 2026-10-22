@@ -38,8 +38,7 @@ static NSString* kRmsRoot(void) {
             [clip addClip];
             NSArray* colors = @[(id)[UIColor colorWithRed:0.14 green:0.30 blue:0.85 alpha:1].CGColor,
                                  (id)[UIColor colorWithRed:0.05 green:0.72 blue:0.72 alpha:1].CGColor];
-            CGGradient* grad = CGGradientCreateWithColors(nil, (__bridge CFArrayRef)colors,
-                CGPointMake(0, 0), CGPointMake(0, s.height));
+            CGGradientRef grad = CGGradientCreateWithColors(nil, (__bridge CFArrayRef)colors, NULL);
             CGContextDrawLinearGradient(ctx.CGContext, grad, CGPointMake(0, 0),
                 CGPointMake(0, s.height), 0);
             CGGradientRelease(grad);
