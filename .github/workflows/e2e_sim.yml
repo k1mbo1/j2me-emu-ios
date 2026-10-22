@@ -59,12 +59,31 @@ jobs:
       - name: Boot simulator & install app
         run: |
           set -e
-          DEV=$(xcrun simctl list devices available | grep -m1 iPhone | grep -oE '[A-F0-9-]{36}')
+          DEV=""
+          for attempt in 1 2 3; do
+            DEV=$(xcrun simctl list devices available | grep -m1 iPhone | grep -oE '[A-F0-9-]{36}' || true)
+            [ -n "$DEV" ] && break
+            echo "attempt $attempt: no device listed, waiting..."
+            sleep 15
+          done
+          if [ -z "$DEV" ]; then
+            echo "=== available devices ==="
+            xcrun simctl list devices available
+            exit 1
+          fi
           echo "device=$DEV"
           xcrun simctl boot "$DEV" || true
           xcrun simctl bootstatus "$DEV" -b
-          xcrun simctl install booted build/Build/Products/Release-iphonesimulator/J2MEEmu.app
-          echo "INSTALLED"
+          sleep 10
+          for attempt in 1 2 3; do
+            if xcrun simctl install booted build/Build/Products/Release-iphonesimulator/J2MEEmu.app; then
+              echo "INSTALLED (attempt $attempt)"
+              break
+            fi
+            echo "install attempt $attempt failed, retrying after 20s..."
+            sleep 20
+            [ "$attempt" = "3" ] && exit 1
+          done
           xcrun simctl listapps booted | grep -A2 j2me || true
 
       - name: Simulate user importing a jar
