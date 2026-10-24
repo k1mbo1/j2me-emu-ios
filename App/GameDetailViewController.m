@@ -133,7 +133,7 @@
 
 - (void)fillBasic {
     _nameL.text = self.game[@"name"];
-    NSString* variant = [[self.game[@"fileName"] ?: @"" lastPathComponent]
+    NSString* variant = [[(self.game[@"fileName"] ?: @"") lastPathComponent]
         stringByDeletingPathExtension];
     _metaL.text = [NSString stringWithFormat:@"%@ · v%@\n机型：%@",
         self.game[@"vendor"] ?: @"未知厂商",

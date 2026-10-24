@@ -36,7 +36,7 @@
         _subL = [[UILabel alloc] init];
         _subL.font = [UIFont systemFontOfSize:12];
         _subL.textColor = [UIColor colorWithWhite:0.58 alpha:1];
-        _subL.lineBreakMode = NSLineBreakByTruncatingMiddle];
+        _subL.lineBreakMode = NSLineBreakByTruncatingMiddle;
         [self.contentView addSubview:_subL];
     }
     return self;
@@ -101,7 +101,7 @@
     self.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
     self.nameL.text = g[@"name"];
     /* 副标题：厂商 · 机型/分辨率变体（取 fileName 末段） */
-    NSString* variant = [[g[@"fileName"] ?: @"" lastPathComponent]
+    NSString* variant = [[(g[@"fileName"] ?: @"") lastPathComponent]
         stringByDeletingPathExtension];
     self.subL.text = [NSString stringWithFormat:@"%@ · %@",
         g[@"vendor"] ?: @"未知厂商", variant.length ? variant : @"通用版"];

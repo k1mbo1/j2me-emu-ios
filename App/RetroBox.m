@@ -73,7 +73,7 @@ static NSCache* iconCache(void) {
     NSURLRequest* req = [NSURLRequest requestWithURL:[self absoluteURL:url]
                                          cachePolicy:NSURLRequestUseProtocolCachePolicy
                                      timeoutInterval:30];
-    [[self session] dataTaskWithRequest:req
+    [[[self session] dataTaskWithRequest:req
         completionHandler:^(NSData* data, NSURLResponse* resp, NSError* err) {
             id json = nil;
             NSString* error = nil;
@@ -102,8 +102,10 @@ static NSCache* iconCache(void) {
         if (cb) cb(nil, @"无效地址");
         return;
     }
-    NSURLRequest* req = [NSURLRequest requestWithURL:u timeoutInterval:60];
-    [[self session] dataTaskWithRequest:req
+    NSURLRequest* req = [NSURLRequest requestWithURL:u
+                                         cachePolicy:NSURLRequestUseProtocolCachePolicy
+                                     timeoutInterval:60];
+    [[[self session] dataTaskWithRequest:req
         completionHandler:^(NSData* data, NSURLResponse* resp, NSError* err) {
             NSString* error = nil;
             if (err) error = err.localizedDescription;
