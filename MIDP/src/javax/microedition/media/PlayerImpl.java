@@ -186,12 +186,13 @@ public final class PlayerImpl implements Player, ToneControl {
         int level = 100;
         boolean muted = false;
 
-        public void setLevel(int l) {
+        public int setLevel(int l) {
             if (l < 0) l = 0;
             if (l > 100) l = 100;
             level = l;
             if (h >= 0) nSetVolume(h, muted ? 0 : l);
             notify(PlayerListener.VOLUME_CHANGED, null);
+            return level;
         }
         public int getLevel() {
             if (h >= 0) {

@@ -42,6 +42,17 @@ public final class String {
         value = decodeUtf8(b, off, len);
     }
 
+    /** 指定字符集 + 偏移长度的构造（游戏读文本资源常用；GBK 按 UTF-8 宽松解码） */
+    public String(byte[] b, int off, int len, String enc)
+            throws java.io.UnsupportedEncodingException {
+        if (enc == null) throw new NullPointerException();
+        if (!"UTF-8".equals(enc) && !"utf-8".equals(enc) && !"UTF8".equals(enc)
+                && !"GBK".equalsIgnoreCase(enc) && !"gb2312".equalsIgnoreCase(enc)
+                && !"GB2312".equals(enc) && !"ISO-8859-1".equalsIgnoreCase(enc))
+            throw new java.io.UnsupportedEncodingException(enc);
+        value = decodeUtf8(b, off, len);
+    }
+
     public String(StringBuffer sb) {
         synchronized (sb) {
             value = new char[sb.length()];

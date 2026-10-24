@@ -38,6 +38,11 @@ public final class Display {
 
     public Displayable getCurrent() { return current; }
 
+    /** callSerially：在重绘后尽快串行执行（此处同步运行，兼容游戏动画循环用法） */
+    public void callSerially(Runnable r) {
+        if (r != null) r.run();
+    }
+
     public boolean isShown(Displayable d) { return current == d; }
 
     public boolean vibrate(int ms) { return nativeVibrate(ms); }

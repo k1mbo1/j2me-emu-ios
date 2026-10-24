@@ -117,6 +117,11 @@ public abstract class Canvas extends Displayable {
         if (dirty) doFrame();
     }
 
+    /** 标准 API（复数形式）：强制立即处理未完成的 repaint */
+    public final void serviceRepaints() {
+        if (dirty) doFrame();
+    }
+
     /* ---- 帧驱动（Bridge 每帧调用，包内可见） ---- */
     void doFrame() {
         if (dirty) {

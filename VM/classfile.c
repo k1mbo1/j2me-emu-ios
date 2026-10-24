@@ -425,6 +425,13 @@ static Class* parseClass(const uint8_t* data, size_t len) {
 /* ============ 类加载入口 ============ */
 
 Class* vmFindClass(const char* name) {
+    /* 兼容点分写法（manifest MIDlet-1 / 命令行参数给的是 a.b.C），统一转内部 a/b/C */
+    char norm[512];
+    size_t ni = 0;
+    for (const char* p = name; *p && ni < sizeof(norm) - 1; p++)
+        norm[ni++] = (*p == '.') ? '/' : *p;
+    norm[ni] = 0;
+    name = norm;
     for (Class* c = vmG.classes; c; c = c->next)
         if (strcmp(c->name, name) == 0) return c;
     Class* c = cfLoadClass(name);

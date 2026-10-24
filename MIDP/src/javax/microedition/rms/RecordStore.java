@@ -68,6 +68,22 @@ public class RecordStore {
         open = false;
     }
 
+    /** 删除记录仓库（MIDP 标准 API；同时清理内存中的打开实例） */
+    public static void deleteRecordStore(String recordStoreName)
+            throws RecordStoreException, RecordStoreNotFoundException {
+        if (recordStoreName == null) throw new NullPointerException();
+        for (int i = 0; i < openStores.size(); i++) {
+            RecordStore rs = (RecordStore) openStores.elementAt(i);
+            if (rs.name.equals(recordStoreName)) {
+                openStores.removeElementAt(i);
+                rs.open = false;
+                break;
+            }
+        }
+        if (!nativeDeleteStore(recordStoreName))
+            throw new RecordStoreNotFoundException(recordStoreName);
+    }
+
     public String getName() { return name; }
 
     public int addRecord(byte[] data, int offset, int numBytes)
@@ -302,4 +318,5 @@ public class RecordStore {
     static native byte[] nativeLoadStore(String name);
     static native void nativeSaveStore(String name, byte[] data);
     static native String[] nativeListStores();
+    static native boolean nativeDeleteStore(String name);
 }

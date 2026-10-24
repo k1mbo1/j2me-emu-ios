@@ -1,7 +1,7 @@
 package javax.microedition.media;
 
-/* Player: MMAPI 播放器（JSR-135 状态机） */
-public interface Player {
+/* Player: MMAPI 播放器（JSR-135 状态机），继承 Controllable */
+public interface Player extends Controllable {
     int UNREALIZED  = 100;
     int REALIZED    = 200;
     int PREFETCHED  = 300;

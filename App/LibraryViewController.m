@@ -1,10 +1,12 @@
 /* LibraryViewController.m - 游戏库：Documents/games 列表 + 导入/删除 + 启动
  * v1.0.3：列表显示 MIDlet 显示名（直读 jar manifest）+ 文件名/大小副标题 +
  *        抽象方块图标 + 按显示名排序 + 空状态提示。
+ * v1.0.4：新增"在线仓库"入口（左上角），浏览/搜索/下载 RetroBox 全库游戏。
  * 首次启动自动安装内置示例贪吃蛇。每个游戏独立 RMS 存档目录。
  */
 #import "LibraryViewController.h"
 #import "GameViewController.h"
+#import "OnlineStoreViewController.h"
 #import "iOSBridge.h"
 
 @interface LibraryViewController () <UIDocumentPickerDelegate>
@@ -55,6 +57,9 @@ static NSString* kRmsRoot(void) {
 
 - (void)viewDidLoad {
     [super viewDidLoad];
+    self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc]
+        initWithTitle:@"在线仓库" style:UIBarButtonItemStylePlain
+        target:self action:@selector(storeTapped:)];
     self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc]
         initWithBarButtonSystemItem:UIBarButtonSystemItemAdd
         target:self action:@selector(importTapped:)];
@@ -118,7 +123,7 @@ static NSString* kRmsRoot(void) {
         empty.textAlignment = NSTextAlignmentCenter;
         empty.textColor = [UIColor colorWithWhite:0.55 alpha:1];
         empty.font = [UIFont systemFontOfSize:15];
-        empty.text = @"游戏库是空的\n\n点右上角 ＋ 导入 .jar 文件\n也可以通过\"文件\"App 或 AirDrop\n把 jar 发送到本应用";
+        empty.text = @"游戏库是空的\n\n点左上角『在线仓库』浏览 1.4 万+ 经典游戏\n下载后自动进入游戏库\n\n也可以点右上角 ＋ 导入 .jar 文件\n或通过\"文件\"App / AirDrop 发送到本应用";
         self.tableView.backgroundView = empty;
     } else {
         self.tableView.backgroundView = nil;
@@ -144,6 +149,12 @@ static NSString* kRmsRoot(void) {
 }
 
 /* ============ 导入 ============ */
+
+- (void)storeTapped:(id)sender {
+    OnlineStoreViewController* store = [[OnlineStoreViewController alloc]
+        initWithCategoryPath:nil title:@"在线游戏仓库"];
+    [self.navigationController pushViewController:store animated:YES];
+}
 
 - (void)importTapped:(id)sender {
     UIDocumentPickerViewController* picker = [[UIDocumentPickerViewController alloc]

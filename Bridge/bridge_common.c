@@ -359,6 +359,44 @@ static Slot n_saveStore(VMThread* t, Slot* a) {
     return r;
 }
 
+/* RecordStore.nativeDeleteStore(String name) -> boolean（存在并删除成功） */
+static Slot n_deleteStore(VMThread* t, Slot* a) {
+    Slot r;
+    r.ref = NULL;
+    r.i = 0;
+    Object* s = UNREF(a[0].ref);
+    char* name = s ? vmStringToUTF(t, s) : NULL;
+    if (!name || !safeStoreName(name)) { free(name); return r; }
+    char path[1100];
+    snprintf(path, sizeof(path), "%s/%s.rms", g_rmsDir, name);
+    int ok = remove(path) == 0;
+    if (ok) {
+        /* 从 _index.txt 移除该行（写临时文件再替换） */
+        char ipath[1100], tpath[1100];
+        snprintf(ipath, sizeof(ipath), "%s/_index.txt", g_rmsDir);
+        snprintf(tpath, sizeof(tpath), "%s/_index.tmp", g_rmsDir);
+        FILE* gi = fopen(ipath, "r");
+        if (gi) {
+            FILE* go = fopen(tpath, "w");
+            if (go) {
+                char ln[300];
+                while (fgets(ln, sizeof(ln), gi)) {
+                    size_t L = strlen(ln);
+                    while (L && (ln[L-1] == '\n' || ln[L-1] == '\r')) ln[--L] = 0;
+                    if (L && strcmp(ln, name) != 0) fprintf(go, "%s\n", ln);
+                }
+                fclose(go);
+                remove(ipath);
+                rename(tpath, ipath);
+            }
+            fclose(gi);
+        }
+    }
+    free(name);
+    r.i = ok ? 1 : 0;
+    return r;
+}
+
 /* RecordStore.nativeListStores() -> String[] */
 static Slot n_listStores(VMThread* t, Slot* a) {
     (void)a;
@@ -608,6 +646,8 @@ void bridgeRegisterCommonNatives(void) {
                      "(Ljava/lang/String;[B)V", n_saveStore);
     vmRegisterNative("javax/microedition/rms/RecordStore", "nativeListStores",
                      "()[Ljava/lang/String;", n_listStores);
+    vmRegisterNative("javax/microedition/rms/RecordStore", "nativeDeleteStore",
+                     "(Ljava/lang/String;)Z", n_deleteStore);
     vmRegisterNative("java/lang/Class", "nativeGetResource",
                      "(Ljava/lang/String;)[B", n_classGetResource);
     /* MMAPI */

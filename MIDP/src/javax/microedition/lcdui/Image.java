@@ -1,6 +1,7 @@
 package javax.microedition.lcdui;
 
 import java.io.IOException;
+import javax.microedition.lcdui.game.Sprite;
 
 /**
  * Image：int[] ARGB 像素。可变 Image 持有 Graphics。
@@ -77,6 +78,26 @@ public class Image {
 
     public static Image createImage(int[] rgbData, int width, int height, boolean processAlpha) {
         return createRGBImage(rgbData, width, height, processAlpha);
+    }
+
+    /** 区域裁剪 + 变换创建（精灵图拆分常用；transformation 取 Sprite.TRANS_* 常量） */
+    public static Image createImage(Image source, int x, int y, int width, int height,
+                                    int transformation) {
+        if (source == null) throw new NullPointerException();
+        if (width <= 0 || height <= 0
+                || x < 0 || y < 0 || x + width > source.w || y + height > source.h)
+            throw new IllegalArgumentException();
+        boolean rotated = transformation == Sprite.TRANS_ROT90
+                || transformation == Sprite.TRANS_ROT270
+                || transformation == Sprite.TRANS_MIRROR_ROT90
+                || transformation == Sprite.TRANS_MIRROR_ROT270;
+        int w2 = rotated ? height : width;
+        int h2 = rotated ? width : height;
+        Image img = createImage(w2, h2);
+        img.getGraphics().drawRegion(source, x, y, width, height, transformation,
+                0, 0, Graphics.TOP | Graphics.LEFT);
+        img.mutable = false;   /* 语义：返回不可变 Image */
+        return img;
     }
 
     /* ---- 查询 ---- */
