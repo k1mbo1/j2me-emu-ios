@@ -209,6 +209,8 @@ static double gKeyLastRep[256];
 
     /* e2e：虚拟键盘命中与事件链路自检（CI 用，结果写 Documents/uicheck.txt） */
     [self startE2EUICheckIfNeeded];
+    /* e2e：按键注入（CI 用） */
+    [self scheduleE2EKeysIfNeeded];
 
     /* 前后台切换 */
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onEnterBackground)
@@ -670,6 +672,28 @@ static double gKeyLastRep[256];
     for (UIView* v in root.subviews) {
         if ([v isKindOfClass:[KeyPadButton class]]) [out addObject:v];
         [self collectKeyButtons:v into:out];
+    }
+}
+
+/* e2e：--e2e-keys "4d@3.0,4u@3.4"（键码 d=按下 u=抬起 @游戏启动后秒）
+ * 走真实 j2meKey 入队链路，验证队列化按键（含成对 release）到游戏。
+ * 计时基准是本控制器 viewDidLoad（此时 VM 已启动），不受游戏库/VM 冷启动耗时影响 */
+- (void)scheduleE2EKeysIfNeeded {
+    NSArray* args = [[NSProcessInfo processInfo] arguments];
+    NSUInteger ki = [args indexOfObject:@"--e2e-keys"];
+    if (ki == NSNotFound || ki + 1 >= args.count) return;
+    for (NSString* ev in [args[ki + 1] componentsSeparatedByString:@","]) {
+        NSArray* parts = [ev componentsSeparatedByString:@"@"];
+        if (parts.count != 2) continue;
+        NSString* p0 = (NSString*)parts[0];
+        NSString* p1 = (NSString*)parts[1];
+        if (p0.length < 2 || p1.length < 1) continue;
+        int code = [p0 substringToIndex:p0.length - 1].intValue;
+        int down = [p0 hasSuffix:@"d"] ? 1 : 0;
+        double delay = [p1 doubleValue];
+        if (delay <= 0) continue;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{ j2meKey(code, down); });
     }
 }
 
