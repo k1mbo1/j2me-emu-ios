@@ -22,7 +22,10 @@ static CGFloat g_ascent;
 
 static void cjkInit(void) {
     if (g_font) return;
-    g_font = CTFontCreateWithName(CFSTR("PingFangSC-Regular"), 12.0, NULL);
+    /* Medium 字重：12px 小字笔画核心覆盖率高，放大后饱满清晰
+     * （Regular 在小字号笔画偏细，观感发虚） */
+    g_font = CTFontCreateWithName(CFSTR("PingFangSC-Medium"), 12.0, NULL);
+    if (!g_font) g_font = CTFontCreateWithName(CFSTR("PingFangSC-Regular"), 12.0, NULL);
     if (!g_font) g_font = CTFontCreateWithName(CFSTR("Heiti SC"), 12.0, NULL);
     if (!g_font) g_font = CTFontCreateWithName(CFSTR("Helvetica"), 12.0, NULL);
     g_ascent = g_font ? CTFontGetAscent(g_font) : 0;

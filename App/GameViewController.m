@@ -230,12 +230,18 @@ static double gKeyLastRep[256];
     CGFloat padH = 240.0;
 
     CGRect gameRect = CGRectMake(0, top, vb.size.width, bottom - top - (self.padVisible ? padH : 0));
-    /* 逻辑分辨率缩放：档位 0=aspect-fit 适应；1/2/3=整数倍（超屏时降为适应，避免裁剪） */
+    /* 逻辑分辨率缩放：档位 0=aspect-fit 适应；1/2/3=整数倍（超屏时降为适应，避免裁剪）。
+     * 物理像素整数化：把缩放向下取整到「物理像素整数倍」，最近邻采样下每个逻辑
+     * 像素占相同数量的物理像素，笔画粗细均匀、文字锐利（非整数倍会导致笔画
+     * 粗细不均，观感模糊）。 */
     CGSize gs = _gameView.gameSize;
     if (gs.width < 1 || gs.height < 1) gs = CGSizeMake(240, 320);
     CGFloat fit = MIN(gameRect.size.width / gs.width, gameRect.size.height / gs.height);
     CGFloat scale = fit;
     if (self.scaleMode > 0) scale = MIN((CGFloat)self.scaleMode, fit);
+    CGFloat scr = [UIScreen mainScreen].scale;   /* 物理像素/点 */
+    if (scr > 0 && scale * scr >= 2)             /* 至少 2 物理像素/逻辑像素才取整 */
+        scale = floor(scale * scr) / scr;
     self.lastScale = scale;
     CGFloat gw = gs.width * scale, gh = gs.height * scale;
     _gameView.frame = CGRectMake(gameRect.origin.x + (gameRect.size.width - gw) / 2,

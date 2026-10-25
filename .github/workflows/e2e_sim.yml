@@ -55,6 +55,14 @@ jobs:
           jar cfm cjk.jar cjk_manifest.mf -C cjkclasses .
           cd ..
 
+      - name: Build RMS save/load test game jar
+        run: |
+          cd tools
+          rm -rf rmsclasses && mkdir -p rmsclasses
+          javac -source 8 -target 8 -encoding UTF-8 -nowarn -cp ../MIDP/midp.jar -d rmsclasses test/RmsTest.java
+          jar cfm rmstest.jar rms_manifest.mf -C rmsclasses .
+          cd ..
+
       - name: Generate Xcode project
         run: xcodegen generate
 
@@ -104,6 +112,7 @@ jobs:
           mkdir -p "$DATA/Documents/games"
           cp tools/snake.jar "$DATA/Documents/games/MyImport.jar"
           cp tools/cjk.jar "$DATA/Documents/games/CjkTest.jar"
+          cp tools/rmstest.jar "$DATA/Documents/games/RmsTest.jar"
           ls -la "$DATA/Documents/games/"
 
       - name: Launch app (library) & verify alive
@@ -172,6 +181,53 @@ jobs:
           print("PIXEL CHECK PASS")
           PY
 
+      - name: RMS save/load e2e (two launches)
+        run: |
+          set -e
+          xcrun simctl terminate booted com.j2me.emu || true
+          sleep 2
+          xcrun simctl launch booted com.j2me.emu --e2e-autostart RmsTest.jar
+          sleep 6
+          xcrun simctl io booted screenshot rms_save.png
+          xcrun simctl terminate booted com.j2me.emu || true
+          sleep 2
+          xcrun simctl launch booted com.j2me.emu --e2e-autostart RmsTest.jar
+          sleep 6
+          xcrun simctl io booted screenshot rms_load.png
+          DATA=$(xcrun simctl get_app_container booted com.j2me.emu data)
+          ls -la "$DATA/Documents/rms/" || true
+
+      - name: RMS pixel check (save=blue, load=green)
+        run: |
+          python3 - <<'PY'
+          from PIL import Image
+
+          def counts(path):
+              im = Image.open(path).convert("RGB")
+              w, h = im.size
+              px = im.load()
+              blue = green = red = 0
+              for y in range(0, h, 4):
+                  for x in range(0, w, 4):
+                      r, g, b = px[x, y]
+                      if b > 150 and r < 80 and g < 80:
+                          blue += 1
+                      elif g > 150 and r < 80 and b < 80:
+                          green += 1
+                      elif r > 150 and g < 80 and b < 80:
+                          red += 1
+              return blue, green, red
+
+          b1, g1, r1 = counts("rms_save.png")
+          print(f"rms_save: blue={b1} green={g1} red={r1}")
+          assert b1 > 500, f"save run: blue blocks missing ({b1}) - RMS save broken?"
+          b2, g2, r2 = counts("rms_load.png")
+          print(f"rms_load: blue={b2} green={g2} red={r2}")
+          assert g2 > 500, f"load run: green blocks missing ({g2}) - RMS load broken?"
+          assert r1 < 20 and r2 < 20, f"red (FAIL) blocks present: {r1}/{r2}"
+          print("RMS E2E PASS")
+          PY
+
       - name: Upload screenshots
         uses: actions/upload-artifact@v4
         with:
@@ -179,3 +235,5 @@ jobs:
           path: |
             shot_lib.png
             game_*.png
+            rms_save.png
+            rms_load.png

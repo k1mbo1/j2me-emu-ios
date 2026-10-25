@@ -38,6 +38,8 @@ public class RecordStore {
         }
         RecordStore rs = new RecordStore(recordStoreName);
         byte[] data = nativeLoadStore(recordStoreName);
+        System.err.println("[rms] open '" + recordStoreName + "' -> "
+                + (data == null ? "null" : (data.length + "B")));
         if (data == null) {
             if (!createIfNecessary)
                 throw new RecordStoreNotFoundException(recordStoreName);
@@ -185,7 +187,10 @@ public class RecordStore {
 
     /* ---- 持久化（native 文件存储） ---- */
     private void persist() {
-        nativeSaveStore(name, serialize());
+        byte[] d = serialize();
+        System.err.println("[rms] persist '" + name + "' bytes=" + d.length);
+        nativeSaveStore(name, d);
+        System.err.println("[rms] persist done '" + name + "'");
     }
 
     private byte[] serialize() {
