@@ -47,10 +47,20 @@ public class Sound {
     }
 
     public void play() {
+        playWav(1);
+    }
+
+    /** Nokia 扩展：loopCount 次循环播放（-1 = 无限循环；0 视作 1） */
+    public void play(int loopCount) {
+        playWav(loopCount <= 0 ? (loopCount == 0 ? 1 : loopCount) : loopCount);
+    }
+
+    private void playWav(int loopCount) {
         try {
             if (data != null && type == FORMAT_WAV) {
                 if (wavPlayer != null) wavPlayer.close();
                 wavPlayer = Manager.createPlayer(new ByteArrayInputStream(data), "audio/x-wav");
+                if (loopCount != 1) wavPlayer.setLoopCount(loopCount);
                 wavPlayer.start();
             } else if (data == null && freq > 0) {
                 Manager.playTone(freq, (int) durMs, gain * 100 / 255);

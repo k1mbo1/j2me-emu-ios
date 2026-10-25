@@ -46,21 +46,30 @@ public final class Font {
     public int getHeight() { return charH; }
     public int getBaselinePosition() { return ascent; }
 
-    public int charWidth(char c) { return charW; }
+    public int charWidth(char c) { return isWide(c) ? 12 : charW; }
     public int charsWidth(char[] c, int off, int len) {
         if (c == null) throw new NullPointerException();
         if (off < 0 || off > c.length || len < 0 || off + len > c.length)
             throw new ArrayIndexOutOfBoundsException();
-        return len * charW;
+        int w = 0;
+        for (int i = off; i < off + len; i++) w += isWide(c[i]) ? 12 : charW;
+        return w;
     }
     public int stringWidth(String s) {
         if (s == null) throw new NullPointerException();
-        return s.length() * charW;
+        int w = 0, n = s.length();
+        for (int i = 0; i < n; i++) w += isWide(s.charAt(i)) ? 12 : charW;
+        return w;
     }
     public int substringWidth(String s, int off, int len) {
         if (s == null) throw new NullPointerException();
         if (off < 0 || off > s.length() || len < 0 || off + len > s.length())
             throw new StringIndexOutOfBoundsException();
-        return len * charW;
+        int w = 0;
+        for (int i = off; i < off + len; i++) w += isWide(s.charAt(i)) ? 12 : charW;
+        return w;
     }
+
+    /** 宽字符判定：与 C 端 rasterText 的 emuIsWideChar 一致（CJK/全角按 12 像素） */
+    private static boolean isWide(char c) { return c >= 0x2E80; }
 }

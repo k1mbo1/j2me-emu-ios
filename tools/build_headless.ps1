@@ -4,10 +4,10 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 Set-Location -LiteralPath $root
 & gcc -O2 -DMINIZ_USE_ACP -o tools\headless.exe `
-    tools\headless_main.c `
+    tools\headless_main.c tools\cjk_font_win.c `
     VM\vm.c VM\classfile.c VM\interp.c VM\heap.c VM\zip.c `
     Bridge\bridge_common.c Bridge\midi_synth.c `
     VM\miniz\miniz.c VM\miniz\miniz_zip.c VM\miniz\miniz_tinfl.c VM\miniz\miniz_tdef.c `
-    -I VM -I Bridge
+    -I VM -I Bridge -lgdi32
 if ($LASTEXITCODE -ne 0) { throw 'gcc FAILED' }
 "headless.exe OK: $((Get-Item tools\headless.exe).Length) bytes"

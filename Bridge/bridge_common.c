@@ -7,6 +7,7 @@
  */
 #include "bridge_common.h"
 #include "font8x12.h"
+#include "cjk_font.h"
 #include "miniz/miniz.h"
 #include "midi_synth.h"
 #include <sys/stat.h>
@@ -61,11 +62,41 @@ static Slot n_rasterText(VMThread* t, Slot* a) {
     int32_t* px = (int32_t*)ARRAY_DATA(data);
     int len = s ? vmStringLength(s) : 0;
     uint16_t* ch = len > 0 ? vmStringChars(s) : NULL;
+    int penX = x;
     for (int i = 0; i < len; i++) {
         uint16_t c = ch[i];
+        /* 宽字符：交给平台字体栅格化为 12x12 点阵（中文/全角）。无字形时退回 '?'。 */
+        if (emuIsWideChar(c)) {
+            unsigned char glyph[24];
+            if (emuCjkGlyph(c, glyph)) {
+                for (int row = 0; row < 12; row++) {
+                    int py = y + row;
+                    if (py < clipY || py >= clipY + clipH) continue;
+                    if (py < 0) continue;
+                    if (py * stride >= data->length) continue;
+                    int bits = (glyph[row * 2] << 4) | (glyph[row * 2 + 1] >> 4);
+                    if (!bits) continue;
+                    for (int col = 0; col < 12; col++) {
+                        if (!(bits & (0x800 >> col))) continue;
+                        int pxi = penX + col;
+                        if (pxi < clipX || pxi >= clipX + clipW || pxi < 0) continue;
+                        if (py * stride + pxi >= data->length) continue;
+                        px[py * stride + pxi] = color;
+                        if (bold) {
+                            int px2 = pxi + 1;
+                            if (px2 < clipX + clipW && py * stride + px2 < data->length)
+                                px[py * stride + px2] = color;
+                        }
+                    }
+                }
+                penX += 12;
+                continue;
+            }
+        }
         if (c < 32 || c > 126) c = '?';
         const uint8_t* glyph = font8x12[c - 32];
-        int gx = x + i * 8;
+        int gx = penX;
+        penX += 8;
         for (int row = 0; row < 12; row++) {
             int py = y + row;
             if (py < clipY || py >= clipY + clipH) continue;

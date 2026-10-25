@@ -5,6 +5,7 @@
  * 选项:
  *   --frames N     帧数（默认 60）
  *   --keys <seq>   按键序列（数字字符，如 2486 表示 上左下右，每帧一键）
+ *   --keydelay N   延迟 N 帧后才开始发送按键（跳过加载画面）
  *   --ppm <file>   周期输出 Canvas 帧到 PPM（每 10 帧与最后一帧）
  *   --rms <dir>    RMS 持久化目录（默认 rms）
  */
@@ -209,7 +210,8 @@ static void writePpm(const char* path, Object* canvas, Field* fBuf, Field* fW, F
 }
 
 static int runMidlet(const char* midpJar, const char* gameJar, const char* cls,
-                     int frames, const char* keys, const char* ppm, const char* rmsDir) {
+                     int frames, const char* keys, const char* ppm, const char* rmsDir,
+                     int keyDelay, int keyHold) {
     if (vmInit(midpJar) != 0) { vmLog("[midlet] vmInit 失败"); return 1; }
     if (gameJar && vmAddJar(gameJar) != 0) { vmLog("[midlet] game jar 加载失败"); return 1; }
     bridgeSetRmsDir(rmsDir);
@@ -247,10 +249,21 @@ static int runMidlet(const char* midpJar, const char* gameJar, const char* cls,
 
     int keyIdx = 0;
     int paintedFrames = 0;
+    int heldKey = -1, releaseAt = -1;
     for (int fno = 0; fno < frames; fno++) {
         Object* cur = (dispCls && fCur) ? UNREF(dispCls->statics[fCur->slot].ref) : NULL;
+        /* 释放上一按键（--keyhold 保持 N 帧后才释放） */
+        if (releaseAt == fno && heldKey >= 0 && cur && vmIsSubclass(cur->clazz, canvasCls)) {
+            Method* kr = vmFindMethodImpl(cur->clazz, "keyReleased", "(I)V");
+            Slot kb[2];
+            kb[0].ref = JREF(cur);
+            kb[1].i = (int64_t)(int32_t)heldKey;
+            if (kr) { vmCall(t, kr, kb); if (vmHasException(t)) { printException(t, "keyReleased"); return 3; } }
+            heldKey = -1;
+        }
         /* 键事件（发给当前 Canvas） */
-        if (keys && keys[keyIdx] && cur && vmIsSubclass(cur->clazz, canvasCls)) {
+        if (keys && keys[keyIdx] && cur && fno >= keyDelay && heldKey < 0
+            && vmIsSubclass(cur->clazz, canvasCls)) {
             int kc = (uint8_t)keys[keyIdx++];
             Method* kp = vmFindMethodImpl(cur->clazz, "keyPressed", "(I)V");
             Method* kr = vmFindMethodImpl(cur->clazz, "keyReleased", "(I)V");
@@ -258,7 +271,8 @@ static int runMidlet(const char* midpJar, const char* gameJar, const char* cls,
             ka[0].ref = JREF(cur);
             ka[1].i = (int64_t)(int32_t)kc;
             if (kp) { vmCall(t, kp, ka); if (vmHasException(t)) { printException(t, "keyPressed"); return 3; } }
-            if (kr) { vmCall(t, kr, ka); if (vmHasException(t)) { printException(t, "keyReleased"); return 3; } }
+            if (keyHold > 0) { heldKey = kc; releaseAt = fno + keyHold; }
+            else if (kr) { vmCall(t, kr, ka); if (vmHasException(t)) { printException(t, "keyReleased"); return 3; } }
         }
         /* 帧：Canvas.doFrame()（dirty 则 paint） */
         cur = (dispCls && fCur) ? UNREF(dispCls->statics[fCur->slot].ref) : NULL;
@@ -309,14 +323,17 @@ int main(int argc, char** argv) {
             const char* cls = argv[i + 1];
             int frames = 60;
             const char* keys = NULL, * ppm = NULL, * rmsDir = "rms";
+            int keyDelay = 0, keyHold = 0;
             for (int j = i + 2; j < argc - 1; j++) {
                 if (strcmp(argv[j], "--frames") == 0) frames = atoi(argv[j + 1]);
                 else if (strcmp(argv[j], "--keys") == 0) keys = argv[j + 1];
                 else if (strcmp(argv[j], "--ppm") == 0) ppm = argv[j + 1];
                 else if (strcmp(argv[j], "--rms") == 0) rmsDir = argv[j + 1];
+                else if (strcmp(argv[j], "--keydelay") == 0) keyDelay = atoi(argv[j + 1]);
+                else if (strcmp(argv[j], "--keyhold") == 0) keyHold = atoi(argv[j + 1]);
             }
             if (argc < 4) { fprintf(stderr, "--midlet 需要 game.jar\n"); return 1; }
-            return runMidlet(argv[1], argv[2], cls, frames, keys, ppm, rmsDir);
+            return runMidlet(argv[1], argv[2], cls, frames, keys, ppm, rmsDir, keyDelay, keyHold);
         }
     }
 
