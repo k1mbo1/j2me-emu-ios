@@ -88,23 +88,8 @@ static NSString* kRmsRoot(void) {
         });
     }
 
-    /* e2e：--e2e-keys "4d@3.0,4u@3.4,6d@3.8,6u@4.2"（键码 d=按下 u=抬起 @启动后秒）
-     * 走真实 j2meKey 入队链路，验证队列化按键（含成对 release）到游戏 */
-    NSUInteger ki = [args indexOfObject:@"--e2e-keys"];
-    if (ki != NSNotFound && ki + 1 < args.count) {
-        for (NSString* ev in [args[ki + 1] componentsSeparatedByString:@","]) {
-            NSArray* parts = [ev componentsSeparatedByString:@"@"];
-            NSString* p0 = (parts.count > 0) ? (NSString*)parts[0] : nil;
-            NSString* p1 = (parts.count > 1) ? (NSString*)parts[1] : nil;
-            if (parts.count != 2 || p0.length < 2 || p1.length < 1) continue;
-            int code = [p0 substringToIndex:p0.length - 1].intValue;
-            int down = [p0 hasSuffix:@"d"] ? 1 : 0;
-            double delay = [p1 doubleValue];
-            if (delay <= 0) continue;
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)),
-                           dispatch_get_main_queue(), ^{ j2meKey(code, down); });
-        }
-    }
+    /* --e2e-keys 的按键注入已移到 GameViewController（以游戏启动为计时基准，
+     * 游戏库/VM 冷启动慢时不会把按键提前到 VM 就绪之前） */
 }
 
 /* 首次启动：拷贝内置示例贪吃蛇到游戏库 */
