@@ -139,29 +139,31 @@ jobs:
           set -e
           xcrun simctl terminate booted com.j2me.emu || true
           sleep 2
-          # 注入按键序列（7.0-9.0s）：走 j2meKey 队列链路，画布底部回显按键记录；
-          # game_1(6s) 为无按键基线，game_2 起含按键记录
-          xcrun simctl launch booted com.j2me.emu --e2e-autostart CjkTest.jar \
-            --e2e-keys "4d@7.0,4u@7.4,6d@7.8,6u@8.2,53d@8.6,53u@9.0"
+          # 基线：同一游戏、不注入按键（判定「回显行是否真的出现」，避免只看帧间差异）
+          xcrun simctl launch booted com.j2me.emu --e2e-autostart CjkTest.jar
           sleep 6
+          xcrun simctl io booted screenshot game_0_nokey.png
+          xcrun simctl terminate booted com.j2me.emu || true
+          sleep 2
+          # 注入按键序列（游戏启动后 4.0-6.0s）：走 j2meKey 队列链路，画布底部回显按键记录
+          xcrun simctl launch booted com.j2me.emu --e2e-autostart CjkTest.jar \
+            --e2e-keys "4d@4.0,4u@4.4,6d@4.8,6u@5.2,53d@5.6,53u@6.0"
+          sleep 8
           for i in 1 2 3 4 5 6; do
             xcrun simctl io booted screenshot "game_$i.png"
             sleep 1
           done
           ps aux | grep "J2MEEmu.app" | grep -v grep || { echo "APP DEAD in game"; exit 1; }
 
-      - name: Pixel check (blue checker + yellow CJK + frame stability)
+      - name: Pixel check (blue checker + yellow CJK + frame stability + key echo)
         run: |
           pip3 install --quiet --break-system-packages pillow
           python3 - <<'PY'
           from PIL import Image
-          import sys, glob
+          import glob
 
-          shots = sorted(glob.glob("game_*.png"))
-          assert len(shots) >= 4, f"need >=4 game shots, got {shots}"
-          stats = []
-          for p in shots:
-              im = Image.open(p).convert("RGB")
+          def counts(path):
+              im = Image.open(path).convert("RGB")
               w, h = im.size
               px = im.load()
               blue = yellow = 0
@@ -178,8 +180,17 @@ jobs:
                           yloose += 1
                           if r > 220 and g > 220:
                               ystrict += 1
-              stats.append((blue, yellow, ystrict, yloose))
-              print(f"{p}: blue={blue} yellow={yellow} ystrict={ystrict} yloose={yloose}")
+              return blue, yellow, ystrict, yloose
+
+          base = counts("game_0_nokey.png")
+          print(f"game_0_nokey.png: blue={base[0]} yellow={base[1]}")
+          shots = sorted(glob.glob("game_?.png"))
+          assert len(shots) >= 4, f"need >=4 game shots, got {shots}"
+          stats = []
+          for p in shots:
+              s = counts(p)
+              stats.append(s)
+              print(f"{p}: blue={s[0]} yellow={s[1]} ystrict={s[2]} yloose={s[3]}")
           # 每帧棋盘格蓝格与黄色文字必须同时在场（黑帧/半帧则其一骤减）
           for i, (blue, yellow, ys, yl) in enumerate(stats):
               assert blue > 800, f"{shots[i]}: blue too low ({blue}) - flicker/black frame?"
@@ -188,9 +199,9 @@ jobs:
           for i, (blue, yellow, ys, yl) in enumerate(stats):
               assert yl == 0 or ys * 100 >= yl * 55, \
                   f"{shots[i]}: yellow text blurry (strict {ys}/{yl}) - subpixel blending?"
-          # 按键注入断言：keyLog 回显行出现 -> 后段黄像素显著多于基线帧
-          assert stats[-1][1] > stats[0][1] + 15, \
-              f"key events not rendered: first={stats[0][1]} last={stats[-1][1]} - key queue broken?"
+          # 按键回显：与「同游戏无按键」基线对比，后段帧必须多出回显行黄像素
+          assert stats[-1][1] > base[1] + 15, \
+              f"key events not rendered: nokey={base[1]} last={stats[-1][1]} - key queue broken?"
           # 相邻帧差异：画面应稳定（仅游戏区上 60px 与键盘区可能有小差）
           prev = None
           for p in shots:
@@ -204,6 +215,7 @@ jobs:
           PY
 
       - name: RMS save/load e2e (two launches)
+        if: always()
         run: |
           set -e
           xcrun simctl terminate booted com.j2me.emu || true
@@ -220,6 +232,7 @@ jobs:
           ls -la "$DATA/Documents/rms/" || true
 
       - name: RMS pixel check (save=blue, load=green)
+        if: always()
         run: |
           python3 - <<'PY'
           from PIL import Image
@@ -251,6 +264,7 @@ jobs:
           PY
 
       - name: Virtual keypad hit-test & event chain (--e2e-uicheck)
+        if: always()
         run: |
           set -e
           xcrun simctl terminate booted com.j2me.emu || true
@@ -282,6 +296,7 @@ jobs:
           PY
 
       - name: Real game key smoke (War.jar)
+        if: always()
         run: |
           set -e
           DATA=$(xcrun simctl get_app_container booted com.j2me.emu data)
@@ -293,17 +308,18 @@ jobs:
           xcrun simctl terminate booted com.j2me.emu || true
           sleep 2
           xcrun simctl launch booted com.j2me.emu --e2e-autostart War.jar
-          sleep 5
+          sleep 12
           xcrun simctl io booted screenshot war_before.png
           xcrun simctl terminate booted com.j2me.emu || true
           sleep 2
           xcrun simctl launch booted com.j2me.emu --e2e-autostart War.jar \
-            --e2e-keys "53d@6.0,53u@6.4,53d@7.4,53u@7.8,53d@8.8,53u@9.2"
-          sleep 11
+            --e2e-keys "53d@16.0,53u@16.4,53d@17.4,53u@17.8,53d@18.8,53u@19.2"
+          sleep 24
           xcrun simctl io booted screenshot war_after.png
           ps aux | grep "J2MEEmu.app" | grep -v grep || { echo "APP DEAD in war"; exit 1; }
 
       - name: Real game key effect check
+        if: always()
         run: |
           python3 - <<'PY'
           from PIL import Image, ImageChops
@@ -322,11 +338,13 @@ jobs:
           PY
 
       - name: Upload screenshots
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: e2e-screenshots
           path: |
             shot_lib.png
+            game_0_nokey.png
             game_*.png
             uicheck.png
             war_before.png
