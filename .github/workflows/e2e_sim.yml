@@ -134,7 +134,7 @@ jobs:
 
       - name: Pixel check (blue checker + yellow CJK + frame stability)
         run: |
-          pip3 install --quiet pillow
+          pip3 install --quiet --break-system-packages pillow
           python3 - <<'PY'
           from PIL import Image
           import sys, glob
