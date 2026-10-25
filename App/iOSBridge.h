@@ -29,6 +29,9 @@ const uint32_t* j2meFrame(int* w, int* h);
  * down: 1=按下 0=释放 2=重复 */
 void j2meKey(int keyCode, int down);
 
+/* 已派发进游戏的按键事件累计数（自检/回归断言用） */
+int j2meKeyDispatched(void);
+
 /* 生命周期（暂停时 UI 层应同时停帧） */
 void j2mePause(void);    /* pauseApp */
 void j2meResume(void);   /* startApp */

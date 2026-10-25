@@ -9,6 +9,7 @@
 #include "bridge_common.h"
 
 #include <stdarg.h>
+#include <stdlib.h>
 #include <stdatomic.h>
 #include <AudioToolbox/AudioToolbox.h>
 #include "miniz/miniz.h"
@@ -26,7 +27,7 @@ static char      gMainClass[256] = {0};
 
 /* 交付验证标记：非 static 导出符号，strings 检查二进制含此串
  * 即可确认该版本源码确实编进了安装包（防止"改了没生效"） */
-const char* j2meBuildId(void) { return "J2ME-EMU-BUILD-1.0.12"; }
+const char* j2meBuildId(void) { return "J2ME-EMU-BUILD-1.0.13"; }
 
 static Class* gDispCls = NULL;
 static Class* gCanvasCls = NULL;
@@ -386,6 +387,9 @@ typedef struct { int code, down; } J2KeyEvent;
 static J2KeyEvent gKeyQ[J2KEYQ_CAP];
 static atomic_int gKeyQWr = 0;   /* 写位（仅 UI 线程推进） */
 static int gKeyQRd = 0;          /* 读位（仅帧线程推进） */
+static int gKeyDispatched = 0;   /* 已派发到游戏的按键事件累计数（自检用） */
+
+int j2meKeyDispatched(void) { return gKeyDispatched; }
 
 void j2meKey(int keyCode, int down) {
     if (!gThread || !gRunning) return;
@@ -395,27 +399,39 @@ void j2meKey(int keyCode, int down) {
     gKeyQ[wr].code = keyCode;
     gKeyQ[wr].down = down;
     atomic_store(&gKeyQWr, next);
+    if (getenv("J2ME_KEYLOG"))
+        fprintf(stderr, "[key] enq code=%d down=%d wr=%d\n", keyCode, down, next);
 }
 
 /* 在帧驱动上下文调用：把队列中的按键依次派发给当前 Canvas */
 static void keyPump(void) {
-    Object* cur = (gDispCls && gFCur) ? UNREF(gDispCls->statics[gFCur->slot].ref) : NULL;
-    int valid = cur && vmIsSubclass(cur->clazz, gCanvasCls);
     int wr = atomic_load(&gKeyQWr);
+    if (gKeyQRd == wr) return;
+    Object* cur = (gDispCls && gFCur) ? UNREF(gDispCls->statics[gFCur->slot].ref) : NULL;
+    if (!cur || !vmIsSubclass(cur->clazz, gCanvasCls)) {
+        /* Canvas 未就绪（游戏正在切换 Displayable）：保留事件到下一帧，
+         * 不能静默丢弃——否则切画面瞬间的按键全部失效 */
+        if (getenv("J2ME_KEYLOG"))
+            fprintf(stderr, "[key] pending %d event(s), canvas not ready\n", (wr - gKeyQRd + J2KEYQ_CAP) % J2KEYQ_CAP);
+        return;
+    }
     while (gKeyQRd != wr && gRunning) {
-        if (valid) {
-            J2KeyEvent ev = gKeyQ[gKeyQRd];
-            const char* name = ev.down == 1 ? "keyPressed"
-                             : ev.down == 0 ? "keyReleased" : "keyRepeated";
-            Method* m = vmFindMethodImpl(cur->clazz, name, "(I)V");
-            if (m) {
-                Slot ka[2];
-                ka[0].ref = JREF(cur);
-                ka[1].ref = NULL;
-                ka[1].i = (int64_t)(int32_t)ev.code;
-                vmCall(gThread, m, ka);
-                if (vmHasException(gThread)) { printException(gThread, name); break; }
-            }
+        J2KeyEvent ev = gKeyQ[gKeyQRd];
+        const char* name = ev.down == 1 ? "keyPressed"
+                         : ev.down == 0 ? "keyReleased" : "keyRepeated";
+        Method* m = vmFindMethodImpl(cur->clazz, name, "(I)V");
+        if (m) {
+            Slot ka[2];
+            ka[0].ref = JREF(cur);
+            ka[1].ref = NULL;
+            ka[1].i = (int64_t)(int32_t)ev.code;
+            vmCall(gThread, m, ka);
+            gKeyDispatched++;
+            if (getenv("J2ME_KEYLOG"))
+                fprintf(stderr, "[key] dispatch %s(%d) rd=%d\n", name, ev.code, gKeyQRd);
+            if (vmHasException(gThread)) { printException(gThread, name); break; }
+        } else if (getenv("J2ME_KEYLOG")) {
+            fprintf(stderr, "[key] NO handler %s on %s\n", name, cur->clazz->name);
         }
         gKeyQRd = (gKeyQRd + 1) % J2KEYQ_CAP;
     }
@@ -453,6 +469,9 @@ void j2meDestroy(void) {
     gRunning = 0;
     gThread = NULL;
     gMidlet = NULL;
+    /* 清空按键队列：重启/换游戏后不能带着上一次的残留事件 */
+    atomic_store(&gKeyQWr, 0);
+    gKeyQRd = 0;
     vmShutdown();
     fprintf(stderr, "[j2me] 已销毁\n");
 }

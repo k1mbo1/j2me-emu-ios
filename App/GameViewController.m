@@ -116,6 +116,7 @@ static void releasePixels(void* info, const void* data, size_t size) {
 @property (nonatomic, strong) CADisplayLink* displayLink;
 @property (nonatomic, assign) BOOL padVisible;
 @property (nonatomic, assign) BOOL paused;
+@property (nonatomic, assign) BOOL pausedByBackground;  /* 切后台导致暂停：回前台自动恢复 */
 @property (nonatomic, assign) int  scaleMode;      /* 0=适应 1/2/3=倍率档 */
 @property (nonatomic, assign) CGFloat lastScale;  /* 当前实际生效倍率（OSD 显示用） */
 @property (nonatomic, strong) UILabel* osdLabel;
@@ -205,6 +206,9 @@ static double gKeyLastRep[256];
 
     /* 蓝牙手柄 */
     [self watchControllers];
+
+    /* e2e：虚拟键盘命中与事件链路自检（CI 用，结果写 Documents/uicheck.txt） */
+    [self startE2EUICheckIfNeeded];
 
     /* 前后台切换 */
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(onEnterBackground)
@@ -367,8 +371,14 @@ static double gKeyLastRep[256];
     [parent addSubview:btn];
 }
 
-- (void)keyDown:(KeyPadButton*)sender { [self keyPress:sender.keyCode down:YES]; }
-- (void)keyUp:(KeyPadButton*)sender   { [self keyPress:sender.keyCode down:NO]; }
+- (void)keyDown:(KeyPadButton*)sender {
+    sender.backgroundColor = [UIColor colorWithWhite:0.45 alpha:1];   /* 按下高亮：确认触摸已生效 */
+    [self keyPress:sender.keyCode down:YES];
+}
+- (void)keyUp:(KeyPadButton*)sender {
+    sender.backgroundColor = [UIColor colorWithWhite:0.22 alpha:1];
+    [self keyPress:sender.keyCode down:NO];
+}
 
 - (void)keyPress:(int)code down:(BOOL)down {
     /* 允许 Nokia 软键等负键码（-1..-31），其余仍限 1..255 */
@@ -655,11 +665,84 @@ static double gKeyLastRep[256];
     [self presentViewController:alert animated:YES completion:nil];
 }
 
-/* ============ 前后台 ============ */
+/* ============ e2e：虚拟键盘自检 ============ */
+- (void)collectKeyButtons:(UIView*)root into:(NSMutableArray*)out {
+    for (UIView* v in root.subviews) {
+        if ([v isKindOfClass:[KeyPadButton class]]) [out addObject:v];
+        [self collectKeyButtons:v into:out];
+    }
+}
 
-- (void)onEnterBackground { [self setPaused:YES]; }
+- (void)startE2EUICheckIfNeeded {
+    NSArray* args = [[NSProcessInfo processInfo] arguments];
+    if (![args containsObject:@"--e2e-uicheck"]) return;
+    __weak typeof(self) ws = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{ [ws runE2EUICheck]; });
+}
+
+/* 自检两项：
+ * 1) 命中测试——每个按键中心点必须 hitTest 命中自身（排查被遮挡/不可交互）
+ * 2) target-action——向真实按钮发送 TouchDown/Up，走完整 keyPress->j2meKey 链路
+ * 结果写 Documents/uicheck.txt，CI 读取断言 */
+- (void)runE2EUICheck {
+    NSMutableString* log = [NSMutableString string];
+    NSMutableArray* btns = [NSMutableArray array];
+    [self collectKeyButtons:self.keyPad into:btns];
+    UIWindow* win = self.view.window;
+    [log appendFormat:@"buttons=%lu\n", (unsigned long)btns.count];
+    int hitBad = 0;
+    for (KeyPadButton* b in btns) {
+        CGPoint c = [b convertPoint:CGPointMake(CGRectGetWidth(b.bounds) / 2,
+                                               CGRectGetHeight(b.bounds) / 2) toView:win];
+        UIView* hit = [win hitTest:c withEvent:nil];
+        BOOL ok = (hit == b) || (hit && [hit isDescendantOfView:b]);
+        if (!ok) hitBad++;
+        [log appendFormat:@"hit code=%d ok=%d hit=%@\n",
+            b.keyCode, (int)ok, hit ? NSStringFromClass(hit.class) : @"nil"];
+    }
+    /* 事件链路：4/6/5（左右+确认）各一次按下抬起 */
+    int before = j2meKeyDispatched();
+    for (NSNumber* n in @[@(K_LEFT), @(K_RIGHT), @(K_FIRE)]) {
+        int code = n.intValue;
+        KeyPadButton* t = nil;
+        for (KeyPadButton* b in btns) if (b.keyCode == code) { t = b; break; }
+        if (!t) { [log appendFormat:@"act code=%d MISSING\n", code]; continue; }
+        [t sendActionsForControlEvents:UIControlEventTouchDown];
+        [t sendActionsForControlEvents:UIControlEventTouchUpInside];
+        [log appendFormat:@"act code=%d sent\n", code];
+    }
+    [log appendFormat:@"hitBad=%d\n", hitBad];
+    [log appendFormat:@"dispatch_before=%d\n", before];
+    NSString* dir = [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject];
+    NSString* path = [dir stringByAppendingPathComponent:@"uicheck.txt"];
+    /* 等 1 秒让帧驱动跑完冲刷，再写入派发增量 */
+    __weak typeof(self) ws = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        typeof(self) s = ws;
+        if (!s) return;
+        int after = j2meKeyDispatched();
+        NSMutableString* out = [NSMutableString stringWithString:log];
+        [out appendFormat:@"dispatch_after=%d\n", after];
+        [out writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    });
+}
+
+/* ============ 前后台 ============ */
+- (void)onEnterBackground {
+    self.pausedByBackground = YES;
+    [self setPaused:YES];
+}
 - (void)onEnterForeground {
-    /* 保持暂停菜单语义：回前台不自动续，玩家点"继续"恢复 */
+    /* 切后台导致的暂停：回前台自动恢复。
+     * 此前不回自动恢复，回到游戏时画面静止、所有按键被 paused 拦截，
+     * 表现为「按键完全没反应」且没有任何提示 */
+    if (self.pausedByBackground) {
+        self.pausedByBackground = NO;
+        [self setPaused:NO];
+        [self showOsd:@"已恢复"];
+    }
 }
 
 - (void)viewWillDisappear:(BOOL)animated {

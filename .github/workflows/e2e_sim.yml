@@ -250,6 +250,77 @@ jobs:
           print("RMS E2E PASS")
           PY
 
+      - name: Virtual keypad hit-test & event chain (--e2e-uicheck)
+        run: |
+          set -e
+          xcrun simctl terminate booted com.j2me.emu || true
+          sleep 2
+          xcrun simctl launch booted com.j2me.emu --e2e-autostart CjkTest.jar --e2e-uicheck
+          sleep 8
+          xcrun simctl io booted screenshot uicheck.png
+          DATA=$(xcrun simctl get_app_container booted com.j2me.emu data)
+          echo "--- uicheck.txt ---"
+          cat "$DATA/Documents/uicheck.txt"
+          UICHECK="$DATA/Documents/uicheck.txt" python3 - <<'PY'
+          import os, re
+          path = os.environ["UICHECK"]
+          txt = open(path, encoding="utf-8").read()
+          print(txt)
+          btn = int(re.search(r"buttons=(\d+)", txt).group(1))
+          hitbad = int(re.search(r"hitBad=(\d+)", txt).group(1))
+          before = int(re.search(r"dispatch_before=(\d+)", txt).group(1))
+          after = int(re.search(r"dispatch_after=(\d+)", txt).group(1))
+          asserts = (
+              (btn >= 13, f"keypad buttons missing ({btn} < 13)"),
+              (hitbad == 0, f"{hitbad} button(s) not hit-testable (covered/disabled)"),
+              (after - before == 6, f"button events not dispatched: {before}->{after} (expect +6)"),
+          )
+          for ok, msg in asserts:
+              if not ok:
+                  raise SystemExit("UICHECK FAIL: " + msg)
+          print("UICHECK PASS: buttons=%d hitBad=%d dispatched +%d" % (btn, hitbad, after - before))
+          PY
+
+      - name: Real game key smoke (War.jar)
+        run: |
+          set -e
+          DATA=$(xcrun simctl get_app_container booted com.j2me.emu data)
+          mkdir -p "$DATA/Documents/games"
+          JARURL="https://java.iwkk.cn/jar/%E2%99%A8%EF%B8%8F7723%E5%88%86%E7%B1%BB%E5%AE%8C%E6%95%B4%E7%89%88%2F%E7%AD%96%E7%95%A5%2F%E6%AD%AA%E6%AD%AA%E6%AD%AA%E4%BC%A0%E6%88%98%E5%9B%BD%E9%A3%8E%E4%BA%91%2F%E8%AF%BA%E5%9F%BA%E4%BA%9A%20N70%E7%B3%BB%E5%88%97(176%C3%97208).jar"
+          if ! curl -fsSL --max-time 180 -o "$DATA/Documents/games/War.jar" "$JARURL"; then
+            echo "SKIP: war.jar download failed"; exit 0
+          fi
+          xcrun simctl terminate booted com.j2me.emu || true
+          sleep 2
+          xcrun simctl launch booted com.j2me.emu --e2e-autostart War.jar
+          sleep 5
+          xcrun simctl io booted screenshot war_before.png
+          xcrun simctl terminate booted com.j2me.emu || true
+          sleep 2
+          xcrun simctl launch booted com.j2me.emu --e2e-autostart War.jar \
+            --e2e-keys "53d@6.0,53u@6.4,53d@7.4,53u@7.8,53d@8.8,53u@9.2"
+          sleep 11
+          xcrun simctl io booted screenshot war_after.png
+          ps aux | grep "J2MEEmu.app" | grep -v grep || { echo "APP DEAD in war"; exit 1; }
+
+      - name: Real game key effect check
+        run: |
+          python3 - <<'PY'
+          from PIL import Image, ImageChops
+          a = Image.open("war_before.png").convert("RGB")
+          b = Image.open("war_after.png").convert("RGB")
+          def crop(im):
+              w, h = im.size
+              return im.crop((0, int(h*0.15), w, int(h*0.70)))   # 游戏画面区
+          d = ImageChops.difference(crop(a), crop(b)).convert("L")
+          px = list(d.getdata())
+          changed = sum(1 for v in px if v > 24)
+          ratio = changed / len(px)
+          print(f"war frame changed pixels: {changed}/{len(px)} = {ratio:.3%}")
+          assert ratio > 0.02, f"keys had no visible effect on real game ({ratio:.3%})"
+          print("REAL GAME KEY PASS")
+          PY
+
       - name: Upload screenshots
         uses: actions/upload-artifact@v4
         with:
@@ -257,5 +328,8 @@ jobs:
           path: |
             shot_lib.png
             game_*.png
+            uicheck.png
+            war_before.png
+            war_after.png
             rms_save.png
             rms_load.png
