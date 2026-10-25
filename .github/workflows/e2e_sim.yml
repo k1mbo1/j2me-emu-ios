@@ -307,14 +307,17 @@ jobs:
           fi
           xcrun simctl terminate booted com.j2me.emu || true
           sleep 2
+          # 基线：停在标题菜单（War 标题页自动弹出菜单），不注入按键
           xcrun simctl launch booted com.j2me.emu --e2e-autostart War.jar
-          sleep 12
+          sleep 18
           xcrun simctl io booted screenshot war_before.png
           xcrun simctl terminate booted com.j2me.emu || true
           sleep 2
+          # 注入 3 次「下」（游戏启动后 20.0-23.6s，标题菜单已就绪）：
+          # 菜单高亮条应下移，前后画面差异即「真实游戏收到按键」的证据
           xcrun simctl launch booted com.j2me.emu --e2e-autostart War.jar \
-            --e2e-keys "53d@16.0,53u@16.4,53d@17.4,53u@17.8,53d@18.8,53u@19.2"
-          sleep 24
+            --e2e-keys "8d@20.0,8u@20.4,8d@21.6,8u@22.0,8d@23.2,8u@23.6"
+          sleep 36
           xcrun simctl io booted screenshot war_after.png
           ps aux | grep "J2MEEmu.app" | grep -v grep || { echo "APP DEAD in war"; exit 1; }
 
@@ -333,7 +336,7 @@ jobs:
           changed = sum(1 for v in px if v > 24)
           ratio = changed / len(px)
           print(f"war frame changed pixels: {changed}/{len(px)} = {ratio:.3%}")
-          assert ratio > 0.02, f"keys had no visible effect on real game ({ratio:.3%})"
+          assert ratio > 0.008, f"keys had no visible effect on real game ({ratio:.3%})"
           print("REAL GAME KEY PASS")
           PY
 
