@@ -15,9 +15,9 @@
 
 static double noteFreq(int note) { return 440.0 * pow(2.0, (note - 69) / 12.0); }
 
-/* 单音符渲染到缓冲（累加）。t0/t1 为采样区间 [start, end) */
-static void renderNote(int32_t* buf, size_t nSamples,
-                       int note, long startMs, long lenMs, double amp,
+/* 按精确频率渲染单音符到缓冲（累加）。t0/t1 为采样区间 [start, end) */
+static void renderFreq(int32_t* buf, size_t nSamples,
+                       double f, long startMs, long lenMs, double amp,
                        int squareBias) {
     long rate = MSYNTH_RATE;
     long s0 = startMs * rate / 1000;
@@ -25,7 +25,6 @@ static void renderNote(int32_t* buf, size_t nSamples,
     if (s0 < 0) s0 = 0;
     if (s1 > (long)nSamples) s1 = (long)nSamples;
     if (s1 <= s0) return;
-    double f = noteFreq(note);
     double w = 2.0 * 3.14159265358979 * f / (double)rate;
     long atk = rate * 3 / 1000;      /* 3ms attack */
     long rel = rate * 45 / 1000;     /* 45ms release */
@@ -43,6 +42,13 @@ static void renderNote(int32_t* buf, size_t nSamples,
         }
         buf[s0 + i] += (int32_t)(v * env * amp);
     }
+}
+
+/* 按 MIDI 音符号渲染（synthTone/synthToneSeq/synthMidi 用） */
+static void renderNote(int32_t* buf, size_t nSamples,
+                       int note, long startMs, long lenMs, double amp,
+                       int squareBias) {
+    renderFreq(buf, nSamples, noteFreq(note), startMs, lenMs, amp, squareBias);
 }
 
 static int16_t* finalize(int32_t* acc, size_t n) {
@@ -184,6 +190,120 @@ int16_t* synthToneSeq(const uint8_t* seq, size_t len, size_t* outLen) {
         if (evs[k].note < 0) continue;
         renderNote(acc, n, evs[k].note, evs[k].startMs, evs[k].durMs,
                    12000.0 * evs[k].vol / 100.0, 1);
+    }
+    free(evs);
+    int16_t* r = finalize(acc, n);
+    if (r) *outLen = n;
+    return r;
+}
+
+/* ============ Nokia OTA 铃声合成 ============ */
+/* Smart Messaging 位流（MSB-first）：Nokia UI Sound.FORMAT_TONE 格式。
+ * 头: byte0(0x02/0x00) + 7b 0x25 + align + 7b 0x1D + 3b SongType=1
+ *     + 4b 名长 + 16b/字符 + 8b pattern数(仅支持1) + 3b PatternHdr=0
+ *     + 2b PatternID + 4b Loop + 8b 指令数 + 指令流 + align + 0x00
+ * 指令(3b ID): 1=Note(4b音高+3b时值+2b修饰) 2=Scale(2b+4)
+ *   3=Style(2b) 4=Tempo(5b BPM表索引) 5=Volume(4b 0-15)
+ * 时长: 单位=1/128音符, ms = unit*60000/(bpm*32)
+ * 音色: 纯方波（squareBias=2），贴近 Nokia 单音蜂鸣器 */
+
+static const double OTA_FREQ[13] = {   /* scale=5(880Hz基准) 档 */
+    0.0,                                              /* 0 = pause */
+    523.30, 554.40, 587.30, 622.30, 659.30, 698.50,   /* C C# D D# E F */
+    740.00, 784.00, 830.60, 880.00, 932.30, 987.80    /* F# G G# A A# B */
+};
+static const double OTA_SCALE_MUL[8] = { 1,1,1,1, 0.5, 1.0, 2.0, 4.0 }; /* 枚举4-7 */
+static const long OTA_DUR[6] = { 128, 64, 32, 16, 8, 4 };  /* 1/128 音符单位 */
+static const int OTA_BPM[32] = {
+    25, 28, 31, 35, 40, 45, 50, 56, 63, 70, 80, 90, 100, 112, 125, 140,
+    160, 180, 200, 225, 250, 285, 320, 355, 400, 450, 500, 565, 635, 715, 800, 900
+};
+
+typedef struct { const uint8_t* p; size_t n; size_t bit; int err; } OtaRd;
+
+static int otaBit(OtaRd* b) {
+    if (b->err) return 0;
+    if ((b->bit >> 3) >= b->n) { b->err = 1; return 0; }
+    int v = (b->p[b->bit >> 3] >> (7 - (b->bit & 7))) & 1;
+    b->bit++;
+    return v;
+}
+static unsigned otaBits(OtaRd* b, int cnt) {
+    unsigned v = 0;
+    for (int i = 0; i < cnt; i++) v = (v << 1) | (unsigned)otaBit(b);
+    return v;
+}
+static void otaAlign(OtaRd* b) { b->bit = (b->bit + 7) & ~(size_t)7; }
+
+int16_t* synthOta(const uint8_t* ota, size_t len, size_t* outLen) {
+    *outLen = 0;
+    if (!ota || len < 6) return NULL;
+    OtaRd br = { ota, len, 0, 0 };
+    unsigned hdr = otaBits(&br, 8);
+    if (hdr != 0x02 && hdr != 0x00) return NULL;   /* 0x00 = Nokia Sound 变体 */
+    if (otaBits(&br, 7) != 0x25) return NULL;      /* RingingToneProgramming */
+    otaAlign(&br);
+    if (otaBits(&br, 7) != 0x1D) return NULL;      /* Sound */
+    if (otaBits(&br, 3) != 1) return NULL;         /* BasicSongType */
+    unsigned nameLen = otaBits(&br, 4);
+    for (unsigned i = 0; i < nameLen; i++) { otaBits(&br, 8); otaBits(&br, 8); }
+    if (otaBits(&br, 8) != 1) return NULL;         /* 仅支持单 pattern */
+    if (otaBits(&br, 3) != 0) return NULL;         /* PatternHeaderId */
+    otaBits(&br, 2);   /* PatternID 忽略 */
+    otaBits(&br, 4);   /* Loop 忽略（循环由 Player.setLoopCount 控制） */
+    unsigned nCmd = otaBits(&br, 8);
+    if (br.err || nCmd == 0 || nCmd > 200) return NULL;
+
+    typedef struct { double f; long startMs, soundMs; int vol; } OEv;
+    OEv* evs = (OEv*)malloc(nCmd * sizeof(OEv));
+    if (!evs) return NULL;
+    int nEv = 0;
+    long cursorMs = 0;
+    int scale = 5, style = 0, tempo = OTA_BPM[7], vol = 15;
+    for (unsigned i = 0; i < nCmd; i++) {
+        unsigned cmd = otaBits(&br, 3);
+        if (cmd == 1) {           /* Note */
+            unsigned note = otaBits(&br, 4), dur = otaBits(&br, 3), spec = otaBits(&br, 2);
+            if (br.err) break;
+            long u = (dur < 6) ? OTA_DUR[dur] : 32;
+            if (spec == 1) u = u * 3 / 2;        /* 附点 */
+            else if (spec == 2) u = u * 9 / 4;   /* 双附点 */
+            else if (spec == 3) u = u * 2 / 3;   /* 2/3 长 */
+            long ms = (long)((double)u * 60000.0 / ((double)tempo * 32.0));
+            if (ms < 10) ms = 10;
+            if (note > 12) note = 0;
+            if (note) {
+                double ratio = (style == 1) ? 1.0 : (style == 2) ? 0.5 : 0.9;
+                evs[nEv].f = OTA_FREQ[note] * OTA_SCALE_MUL[scale & 7];
+                evs[nEv].startMs = cursorMs;
+                evs[nEv].soundMs = (long)((double)ms * ratio);
+                evs[nEv].vol = vol;
+                nEv++;
+            }
+            cursorMs += ms;       /* pause 只推进时间 */
+        } else if (cmd == 2) {    /* Scale: 2b 枚举 + 4 */
+            unsigned v = otaBits(&br, 2);
+            if (v < 4) scale = (int)v + 4;
+        } else if (cmd == 3) {    /* Style: 0=Natural 1=Continuous 2=Staccato */
+            style = (int)otaBits(&br, 2);
+        } else if (cmd == 4) {    /* Tempo: 5b BPM 表索引 */
+            tempo = OTA_BPM[otaBits(&br, 5) & 31];
+        } else if (cmd == 5) {    /* Volume: 4b, 0-15 */
+            vol = (int)otaBits(&br, 4);
+        } else break;             /* 未知指令：截断已解析部分 */
+        if (br.err) break;
+    }
+    if (nEv == 0 || br.err) { free(evs); return NULL; }
+
+    long endMs = cursorMs + 100;
+    if (endMs > 600000) endMs = 600000;   /* 最长 10 分钟 */
+    size_t n = (size_t)endMs * MSYNTH_RATE / 1000;
+    int32_t* acc = (int32_t*)calloc(n ? n : 1, sizeof(int32_t));
+    if (!acc) { free(evs); return NULL; }
+    for (int k = 0; k < nEv; k++) {
+        if (evs[k].soundMs <= 0) continue;
+        renderFreq(acc, n, evs[k].f, evs[k].startMs, evs[k].soundMs,
+                   12000.0 * evs[k].vol / 15.0, 2);   /* 纯方波 */
     }
     free(evs);
     int16_t* r = finalize(acc, n);

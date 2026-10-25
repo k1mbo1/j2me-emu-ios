@@ -2,7 +2,8 @@
  * 1. synthTone:    MMAPI Manager.playTone 单音符
  * 2. synthToneSeq: JSR-135 ToneControl 音序（VERSION/REPEAT/BLOCK/SET_VOLUME/SILENCE）
  * 3. synthMidi:    标准 MIDI 文件（SMF format 0/1）合成
- * 4. pcmToWav:     16bit mono PCM -> WAV 字节流（iOS 交 AVAudioPlayer 播；headless 落盘验证）
+ * 4. synthOta:     Nokia OTA 铃声（Smart Messaging 位流，com.nokia.mid.sound.FORMAT_TONE）
+ * 5. pcmToWav:     16bit mono PCM -> WAV 字节流（iOS 交 AVAudioPlayer 播；headless 落盘验证）
  */
 #ifndef MIDI_SYNTH_H
 #define MIDI_SYNTH_H
@@ -19,6 +20,7 @@ extern "C" {
 int16_t* synthTone(int note, int durMs, int volume, size_t* outLen);
 int16_t* synthToneSeq(const uint8_t* seq, size_t len, size_t* outLen);
 int16_t* synthMidi(const uint8_t* mid, size_t len, size_t* outLen);
+int16_t* synthOta(const uint8_t* ota, size_t len, size_t* outLen);
 uint8_t* pcmToWav(const int16_t* pcm, size_t nSamples, size_t* outLen);
 
 #ifdef __cplusplus

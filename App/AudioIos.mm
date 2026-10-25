@@ -1,5 +1,6 @@
 /* AudioIos.mm - AVAudioPlayer 池实现
- * - ambient session：与系统音乐混音、静音开关生效
+ * - playback session + MixWithOthers：游戏正常出声（不受侧边静音拨片影响），
+ *   同时保留与系统音乐混音（主流游戏 App 标准做法）
  * - autoClose 句柄（playTone 一次性音效）：播完自动回收
  * - PauseAll/ResumeAll 配合暂停菜单；StopAll 退出游戏
  */
@@ -57,9 +58,10 @@ static void ensureSession(void) {
     if (gSessionConfigured) return;
     gSessionConfigured = YES;
     NSError* err = nil;
-    [[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryAmbient
+    /* Playback + MixWithOthers：无视静音拨片出声（游戏标准），仍与系统音乐混音 */
+    [[AVAudioSession sharedInstance] setCategory:AVAudioSessionCategoryPlayback
                                             mode:AVAudioSessionModeDefault
-                                         options:0
+                                         options:AVAudioSessionCategoryOptionMixWithOthers
                                            error:&err];
     if (err) NSLog(@"[audio] session category error: %@", err);
 }

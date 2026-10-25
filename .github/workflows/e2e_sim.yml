@@ -55,6 +55,12 @@ jobs:
           jar cfm cjk.jar cjk_manifest.mf -C cjkclasses .
           cd ..
 
+      - name: OTA tone synth unit test (clang compat)
+        run: |
+          set -e
+          cc -O2 -I Bridge -o ota_test tools/ota_test.c Bridge/midi_synth.c -lm
+          ./ota_test
+
       - name: Build RMS save/load test game jar
         run: |
           cd tools

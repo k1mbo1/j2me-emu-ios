@@ -3,9 +3,11 @@ package com.nokia.mid.sound;
 import java.io.ByteArrayInputStream;
 import javax.microedition.media.Manager;
 import javax.microedition.media.Player;
+import javax.microedition.media.control.VolumeControl;
 
 /* Sound（Nokia UI API）：老式音效接口。
- * 兼容实现：WAV 数据走 MMAPI 播放，单音频率走 Manager.playTone。 */
+ * 兼容实现：WAV 走 MMAPI；FORMAT_TONE（Nokia OTA 铃声位流）由
+ * 底层 synthOta 合成方波 PCM；单音频率走 Manager.playTone。 */
 public class Sound {
 
     public static final int FORMAT_TONE = 1;
@@ -21,7 +23,7 @@ public class Sound {
     private long durMs;           /* 单音时长 */
     private int gain = 255;       /* 0-255 */
     private SoundListener listener;
-    private Player wavPlayer;     /* WAV 播放句柄 */
+    private Player wavPlayer;     /* WAV / OTA 播放句柄 */
 
     public Sound(byte[] data, int type) {
         this.data = data;
@@ -60,6 +62,14 @@ public class Sound {
             if (data != null && type == FORMAT_WAV) {
                 if (wavPlayer != null) wavPlayer.close();
                 wavPlayer = Manager.createPlayer(new ByteArrayInputStream(data), "audio/x-wav");
+                if (loopCount != 1) wavPlayer.setLoopCount(loopCount);
+                wavPlayer.start();
+            } else if (data != null && type == FORMAT_TONE) {
+                /* Nokia OTA 铃声（Smart Messaging 位流）：交底层合成播放 */
+                if (wavPlayer != null) wavPlayer.close();
+                wavPlayer = Manager.createPlayer(new ByteArrayInputStream(data), "audio/x-nokia-tone");
+                VolumeControl vc = (VolumeControl) wavPlayer.getControl("VolumeControl");
+                if (vc != null) vc.setLevel(gain * 100 / 255);
                 if (loopCount != 1) wavPlayer.setLoopCount(loopCount);
                 wavPlayer.start();
             } else if (data == null && freq > 0) {

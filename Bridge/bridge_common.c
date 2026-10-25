@@ -10,6 +10,7 @@
 #include "cjk_font.h"
 #include "miniz/miniz.h"
 #include "midi_synth.h"
+#include <stdio.h>
 #include <sys/stat.h>
 #include <errno.h>
 #include <string.h>
@@ -526,9 +527,11 @@ static Slot n_mediaCreate(VMThread* t, Slot* a) {
     size_t pcmLen = 0;
     int isMidi = typeHas(type, "midi") || (type == NULL && n > 4 && memcmp(p, "MThd", 4) == 0);
     if (isMidi) pcm = synthMidi(p, (size_t)n, &pcmLen);
+    else if (typeHas(type, "nokia-tone")) pcm = synthOta(p, (size_t)n, &pcmLen);
     else if (typeHas(type, "tone-seq")) pcm = synthToneSeq(p, (size_t)n, &pcmLen);
     free(type);
     if (pcm) {
+        fprintf(stderr, "[media] synth %d samples -> wav\n", (int)pcmLen);
         size_t wavLen = 0;
         uint8_t* wav = pcmToWav(pcm, pcmLen, &wavLen);
         free(pcm);
