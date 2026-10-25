@@ -263,6 +263,7 @@ static void printException(VMThread* t, const char* where) {
 
 int j2meStart(const char* midpJarPath, const char* gameJarPath, const char* rmsDir,
               int screenW, int screenH) {
+    fprintf(stderr, "[j2me] build %s\n", j2meBuildId());   /* 保符号存活 + e2e 日志可查 */
     gRunning = 0;
     gLastError[0] = 0;
     gMidletName[0] = 0;
