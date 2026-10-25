@@ -48,18 +48,19 @@ static int renderGlyph(unsigned int c, unsigned char* out24) {
     CGContextSetGrayFillColor(ctx, 1.0, 1.0);
     CGContextSetShouldAntialias(ctx, true);
     CGContextSetShouldSmoothFonts(ctx, false);
-    CGPoint pos = CGPointMake(0.f, g_ascent > 0 ? 0.f : 0.f);
-    /* 位图原点在左下：基线放在靠近底部，留 1px 下边距 */
-    pos = CGPointMake(0.5f, 1.0f);
+    /* CG 绘制坐标原点在左下：基线离底部 (12 - ascent)，让 12px 字身垂直居中 */
+    CGFloat base = (g_ascent > 8.0 && g_ascent < 12.0) ? (12.0 - g_ascent) : 3.0;
+    CGPoint pos = CGPointMake(0.5f, (float)base);
     CTFontDrawGlyphs(g_font, &glyph, &pos, 1, ctx);
     CGContextRelease(ctx);
 
     memset(out24, 0, 24);
+    /* CGBitmapContext 内存首行即顶部（top-down），与点阵约定（顶行在前、
+     * 高位在左，同 Windows GDI 端）一致：直接映射，不再翻转 */
     for (int y = 0; y < 12; y++) {
-        int row = 11 - y;              /* 位图 y 向上，点阵行向下 */
         for (int x = 0; x < 12; x++) {
             if (gray[y * 12 + x] < 90) continue;
-            out24[row * 2 + (x >> 3)] |= (unsigned char)(0x80 >> (x & 7));
+            out24[y * 2 + (x >> 3)] |= (unsigned char)(0x80 >> (x & 7));
         }
     }
     return 1;

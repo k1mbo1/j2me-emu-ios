@@ -47,6 +47,14 @@ jobs:
           cd ..
           cp tools/snake.jar BuiltAssets/
 
+      - name: Build CJK/flicker test game jar
+        run: |
+          cd tools
+          rm -rf cjkclasses && mkdir -p cjkclasses
+          javac -source 8 -target 8 -encoding UTF-8 -nowarn -cp ../MIDP/midp.jar -d cjkclasses test/CjkTest.java
+          jar cfm cjk.jar cjk_manifest.mf -C cjkclasses .
+          cd ..
+
       - name: Generate Xcode project
         run: xcodegen generate
 
@@ -88,16 +96,17 @@ jobs:
           done
           xcrun simctl listapps booted | grep -A2 j2me || true
 
-      - name: Simulate user importing a jar
+      - name: Simulate user importing jars (before launch, for autostart)
         run: |
           set -e
           DATA=$(xcrun simctl get_app_container booted com.j2me.emu data)
           echo "container=$DATA"
           mkdir -p "$DATA/Documents/games"
           cp tools/snake.jar "$DATA/Documents/games/MyImport.jar"
+          cp tools/cjk.jar "$DATA/Documents/games/CjkTest.jar"
           ls -la "$DATA/Documents/games/"
 
-      - name: Launch app & verify alive & screenshots
+      - name: Launch app (library) & verify alive
         run: |
           set -e
           echo "launching..."
@@ -105,16 +114,68 @@ jobs:
           sleep 4
           echo "--- process check 1 ---"
           ps aux | grep "J2MEEmu.app" | grep -v grep || echo "APP DEAD at t=4s"
-          xcrun simctl io booted screenshot shot1.png
+          xcrun simctl io booted screenshot shot_lib.png
           sleep 4
           echo "--- process check 2 ---"
           ps aux | grep "J2MEEmu.app" | grep -v grep || echo "APP DEAD at t=8s"
-          xcrun simctl io booted screenshot shot2.png
+
+      - name: Autostart CJK game & burst screenshots
+        run: |
+          set -e
+          xcrun simctl terminate booted com.j2me.emu || true
+          sleep 2
+          xcrun simctl launch booted com.j2me.emu --e2e-autostart CjkTest.jar
+          sleep 6
+          for i in 1 2 3 4 5 6; do
+            xcrun simctl io booted screenshot "game_$i.png"
+            sleep 1
+          done
+          ps aux | grep "J2MEEmu.app" | grep -v grep || { echo "APP DEAD in game"; exit 1; }
+
+      - name: Pixel check (blue checker + yellow CJK + frame stability)
+        run: |
+          pip3 install --quiet pillow
+          python3 - <<'PY'
+          from PIL import Image
+          import sys, glob
+
+          shots = sorted(glob.glob("game_*.png"))
+          assert len(shots) >= 4, f"need >=4 game shots, got {shots}"
+          stats = []
+          for p in shots:
+              im = Image.open(p).convert("RGB")
+              w, h = im.size
+              px = im.load()
+              blue = yellow = 0
+              for y in range(0, h, 4):          # stride sampling
+                  for x in range(0, w, 4):
+                      r, g, b = px[x, y]
+                      if b > 120 and b > r + 40 and b > g + 40:
+                          blue += 1
+                      elif r > 180 and g > 180 and b < 110:
+                          yellow += 1
+              stats.append((blue, yellow))
+              print(f"{p}: blue={blue} yellow={yellow}")
+          # 每帧棋盘格蓝格与黄色文字必须同时在场（黑帧/半帧则其一骤减）
+          for i, (blue, yellow) in enumerate(stats):
+              assert blue > 800, f"{shots[i]}: blue too low ({blue}) - flicker/black frame?"
+              assert yellow > 30, f"{shots[i]}: yellow text missing ({yellow}) - CJK render broken?"
+          # 相邻帧差异：画面应稳定（仅游戏区上 60px 与键盘区可能有小差）
+          prev = None
+          for p in shots:
+              im = Image.open(p).convert("L").resize((120, 80))
+              if prev is not None:
+                  diff = sum(abs(a - b) for a, b in zip(prev.getdata(), im.getdata())) / (120 * 80)
+                  print(f"diff {p}: {diff:.2f}")
+                  assert diff < 40, f"frame-to-frame jump too large ({diff:.2f}) - flicker?"
+              prev = im
+          print("PIXEL CHECK PASS")
+          PY
 
       - name: Upload screenshots
         uses: actions/upload-artifact@v4
         with:
           name: e2e-screenshots
           path: |
-            shot1.png
-            shot2.png
+            shot_lib.png
+            game_*.png

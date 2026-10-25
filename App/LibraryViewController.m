@@ -68,6 +68,25 @@ static NSString* kRmsRoot(void) {
     self.tableView.separatorInset = UIEdgeInsetsMake(0, 76, 0, 0);
     [self installSampleIfFirstRun];
     [self reload];
+
+    /* e2e 自动化：--e2e-autostart <文件名> 延迟启动指定游戏（CI 模拟器验证用） */
+    NSArray* args = [[NSProcessInfo processInfo] arguments];
+    NSUInteger ai = [args indexOfObject:@"--e2e-autostart"];
+    if (ai != NSNotFound && ai + 1 < args.count) {
+        NSString* want = args[ai + 1];
+        __weak typeof(self) ws = self;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.2 * NSEC_PER_SEC)),
+                       dispatch_get_main_queue(), ^{
+            typeof(self) s = ws;
+            if (!s) return;
+            for (NSDictionary* g in s.games) {
+                if ([g[@"file"] isEqualToString:want]) {
+                    [s startGame:g];
+                    return;
+                }
+            }
+        });
+    }
 }
 
 /* 首次启动：拷贝内置示例贪吃蛇到游戏库 */

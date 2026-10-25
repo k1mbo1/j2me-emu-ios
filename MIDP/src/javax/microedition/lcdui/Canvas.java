@@ -114,12 +114,23 @@ public abstract class Canvas extends Displayable {
     }
 
     public final void serviceRepaint() {
-        if (dirty) doFrame();
+        waitForPaint();
     }
 
     /** 标准 API（复数形式）：强制立即处理未完成的 repaint */
     public final void serviceRepaints() {
-        if (dirty) doFrame();
+        waitForPaint();
+    }
+
+    /* MIDP 规定 paint 只在系统事件线程执行。游戏线程（pthread）若就地
+     * doFrame/paint，清屏重绘途中主帧循环会拷贝到半成品像素（画面闪烁）。
+     * 改为等待主帧循环（tick / headless 帧驱动）消费 dirty，保证 paint
+     * 与像素上屏在同一线程顺序完成。上限 ~500ms：主循环停转时不卡死。 */
+    private void waitForPaint() {
+        if (!dirty) return;
+        for (int i = 0; i < 500 && dirty; i++) {
+            try { Thread.sleep(1); } catch (InterruptedException e) { return; }
+        }
     }
 
     /* ---- 帧驱动（Bridge 每帧调用，包内可见） ---- */
