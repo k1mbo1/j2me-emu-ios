@@ -1,6 +1,7 @@
 /* cjk_font_win.c - Windows 平台宽字符字形（GDI GetGlyphOutlineW）
  * 仅用于 headless 回归验证与 PC 版；iOS 版由 App/CJKFont.m（CoreText）实现。
- * 输出 12x12 单色点阵，24 字节（每行 2 字节，高位在左）。
+ * 输出 12x12 灰度覆盖率（144 字节，行 0 = 顶部，0-255）。
+ * SimSun 12px 为原生点阵：GGO_BITMAP 二值直接映射 0/255。
  */
 #ifdef _WIN32
 #include <windows.h>
@@ -23,11 +24,11 @@ static void cjkInit(void) {
     if (g_font) SelectObject(g_dc, g_font);
 }
 
-int emuCjkGlyph(unsigned int c, unsigned char* out24) {
+int emuCjkGlyph(unsigned int c, unsigned char* out144) {
     if (c < 0x2E80 || c > 0xFFFF) return 0;
     cjkInit();
     if (!g_dc) return 0;
-    memset(out24, 0, 24);
+    memset(out144, 0, 144);
     GLYPHMETRICS gm;
     MAT2 mat;
     memset(&mat, 0, sizeof(mat));
@@ -50,7 +51,7 @@ int emuCjkGlyph(unsigned int c, unsigned char* out24) {
             if (!(line[col >> 3] & (0x80 >> (col & 7)))) continue;
             int dx = ox + col;
             if (dx < 0 || dx >= 12) continue;
-            out24[dy * 2 + (dx >> 3)] |= (unsigned char)(0x80 >> (dx & 7));
+            out144[dy * 12 + dx] = 255;
         }
     }
     free(buf);
