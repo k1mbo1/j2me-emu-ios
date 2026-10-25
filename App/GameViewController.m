@@ -244,9 +244,19 @@ static double gKeyLastRep[256];
         scale = floor(scale * scr) / scr;
     self.lastScale = scale;
     CGFloat gw = gs.width * scale, gh = gs.height * scale;
-    _gameView.frame = CGRectMake(gameRect.origin.x + (gameRect.size.width - gw) / 2,
-                                 gameRect.origin.y + (gameRect.size.height - gh) / 2,
-                                 gw, gh);
+    CGFloat gx = gameRect.origin.x + (gameRect.size.width - gw) / 2;
+    CGFloat gy = gameRect.origin.y + (gameRect.size.height - gh) / 2;
+    if (scr > 0) {
+        /* frame 的 origin 与 size 必须都落在物理像素边界：
+         * 仅对齐缩放倍率不够——origin 带小数（如导航栏底 95.67pt）时，
+         * 合成器对 layer 做亚像素双线性混合，最近邻放大被污染，
+         * 每行逻辑像素占的物理像素数不均 -> 文字横向碎裂、棋盘出 moiré 横纹 */
+        gx = floor(gx * scr) / scr;
+        gy = floor(gy * scr) / scr;
+        gw = floor(gw * scr + 0.5) / scr;
+        gh = floor(gh * scr + 0.5) / scr;
+    }
+    _gameView.frame = CGRectMake(gx, gy, gw, gh);
     if (self.padVisible) {
         _keyPad.hidden = NO;
         _keyPad.frame = CGRectMake(0, bottom - padH, vb.size.width, padH);
@@ -453,8 +463,11 @@ static double gKeyLastRep[256];
 
 - (void)showPauseMenu:(id)sender {
     [self setPaused:YES];
+    /* 标题带版本号：用户可自查实际安装的版本 */
+    NSString* ver = [NSBundle mainBundle].infoDictionary[@"CFBundleShortVersionString"];
+    NSString* bld = [NSBundle mainBundle].infoDictionary[@"CFBundleVersion"];
     UIAlertController* sheet = [UIAlertController
-        alertControllerWithTitle:self.navigationItem.title
+        alertControllerWithTitle:[NSString stringWithFormat:@"Java模拟器 v%@ (build %@)", ver, bld]
         message:nil preferredStyle:UIAlertControllerStyleActionSheet];
     [sheet addAction:[UIAlertAction actionWithTitle:@"继续游戏" style:UIAlertActionStyleDefault
         handler:^(UIAlertAction* a) { [self setPaused:NO]; }]];

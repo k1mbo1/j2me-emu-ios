@@ -139,7 +139,10 @@ jobs:
           set -e
           xcrun simctl terminate booted com.j2me.emu || true
           sleep 2
-          xcrun simctl launch booted com.j2me.emu --e2e-autostart CjkTest.jar
+          # 注入按键序列（7.0-9.0s）：走 j2meKey 队列链路，画布底部回显按键记录；
+          # game_1(6s) 为无按键基线，game_2 起含按键记录
+          xcrun simctl launch booted com.j2me.emu --e2e-autostart CjkTest.jar \
+            --e2e-keys "4d@7.0,4u@7.4,6d@7.8,6u@8.2,53d@8.6,53u@9.0"
           sleep 6
           for i in 1 2 3 4 5 6; do
             xcrun simctl io booted screenshot "game_$i.png"
@@ -162,6 +165,7 @@ jobs:
               w, h = im.size
               px = im.load()
               blue = yellow = 0
+              ystrict = yloose = 0
               for y in range(0, h, 4):          # stride sampling
                   for x in range(0, w, 4):
                       r, g, b = px[x, y]
@@ -169,12 +173,24 @@ jobs:
                           blue += 1
                       elif r > 180 and g > 180 and b < 110:
                           yellow += 1
-              stats.append((blue, yellow))
-              print(f"{p}: blue={blue} yellow={yellow}")
+                      # 黄字纯度：loose 含中间色，strict 仅锐利纯黄
+                      if r > 140 and g > 140 and b < 110:
+                          yloose += 1
+                          if r > 220 and g > 220:
+                              ystrict += 1
+              stats.append((blue, yellow, ystrict, yloose))
+              print(f"{p}: blue={blue} yellow={yellow} ystrict={ystrict} yloose={yloose}")
           # 每帧棋盘格蓝格与黄色文字必须同时在场（黑帧/半帧则其一骤减）
-          for i, (blue, yellow) in enumerate(stats):
+          for i, (blue, yellow, ys, yl) in enumerate(stats):
               assert blue > 800, f"{shots[i]}: blue too low ({blue}) - flicker/black frame?"
               assert yellow > 30, f"{shots[i]}: yellow text missing ({yellow}) - CJK render broken?"
+          # 文字锐利度：垫黑背景上的黄字若被亚像素混合污染，strict 占比骤降
+          for i, (blue, yellow, ys, yl) in enumerate(stats):
+              assert yl == 0 or ys * 100 >= yl * 55, \
+                  f"{shots[i]}: yellow text blurry (strict {ys}/{yl}) - subpixel blending?"
+          # 按键注入断言：keyLog 回显行出现 -> 后段黄像素显著多于基线帧
+          assert stats[-1][1] > stats[0][1] + 15, \
+              f"key events not rendered: first={stats[0][1]} last={stats[-1][1]} - key queue broken?"
           # 相邻帧差异：画面应稳定（仅游戏区上 60px 与键盘区可能有小差）
           prev = None
           for p in shots:

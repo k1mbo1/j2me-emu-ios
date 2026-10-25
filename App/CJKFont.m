@@ -64,6 +64,7 @@ static int renderGlyph(unsigned int c, unsigned char* out144) {
     CGContextRelease(ctx);
 
     /* 2x2 盒式降采样 -> 12x12 覆盖率（首行即顶部，top-down） */
+    unsigned char cov[144];
     for (int row = 0; row < 12; row++) {
         for (int col = 0; col < 12; col++) {
             int sum = 0;
@@ -71,7 +72,20 @@ static int renderGlyph(unsigned int c, unsigned char* out144) {
                 const unsigned char* line = big + (row * CJK_SS + sy) * bigW + col * CJK_SS;
                 for (int sx = 0; sx < CJK_SS; sx++) sum += line[sx];
             }
-            out144[row * 12 + col] = (unsigned char)(sum / (CJK_SS * CJK_SS));
+            cov[row * 12 + col] = (unsigned char)(sum / (CJK_SS * CJK_SS));
+        }
+    }
+
+    /* 字形源头二值化（0/255 硬点阵，真机 S40 观感）：
+     * 阈值 50% 起步；黑像素过少（笔画瘦/断裂）时逐级降阈值保笔画，
+     * 保底 25%。SimSun 12px 点阵典型 25-40 黑像素，下限取 22。 */
+    static const unsigned char thrs[5] = { 128, 112, 96, 80, 64 };
+    for (int ti = 0; ti < 5; ti++) {
+        int black = 0;
+        for (int i = 0; i < 144; i++) black += (cov[i] >= thrs[ti]);
+        if (black >= 22 || ti == 4) {
+            for (int i = 0; i < 144; i++) out144[i] = (cov[i] >= thrs[ti]) ? 255 : 0;
+            return 1;
         }
     }
     return 1;

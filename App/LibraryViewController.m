@@ -87,6 +87,22 @@ static NSString* kRmsRoot(void) {
             }
         });
     }
+
+    /* e2e：--e2e-keys "4d@3.0,4u@3.4,6d@3.8,6u@4.2"（键码 d=按下 u=抬起 @启动后秒）
+     * 走真实 j2meKey 入队链路，验证队列化按键（含成对 release）到游戏 */
+    NSUInteger ki = [args indexOfObject:@"--e2e-keys"];
+    if (ki != NSNotFound && ki + 1 < args.count) {
+        for (NSString* ev in [args[ki + 1] componentsSeparatedByString:@","]) {
+            NSArray* parts = [ev componentsSeparatedByString:@"@"];
+            if (parts.count != 2 || parts[0].length < 2) continue;
+            int code = [parts[0] substringToIndex:parts[0].length - 1].intValue;
+            int down = [parts[0] hasSuffix:@"d"] ? 1 : 0;
+            double delay = [parts[1] doubleValue];
+            if (delay <= 0) continue;
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{ j2meKey(code, down); });
+        }
+    }
 }
 
 /* 首次启动：拷贝内置示例贪吃蛇到游戏库 */

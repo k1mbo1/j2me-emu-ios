@@ -24,6 +24,10 @@ static char      gLastError[512] = {0};
 static char      gMidletName[128] = {0};
 static char      gMainClass[256] = {0};
 
+/* 交付验证标记：非 static 导出符号，strings 检查二进制含此串
+ * 即可确认该版本源码确实编进了安装包（防止"改了没生效"） */
+const char* j2meBuildId(void) { return "J2ME-EMU-BUILD-1.0.12"; }
+
 static Class* gDispCls = NULL;
 static Class* gCanvasCls = NULL;
 static Field* gFCur = NULL;   /* Display.current */

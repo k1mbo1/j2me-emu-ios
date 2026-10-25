@@ -9,11 +9,22 @@ import com.nokia.mid.ui.FullCanvas;
 public class CjkTest extends MIDlet implements Runnable {
     private FullCanvas cv;
     private boolean started = false;
+    /* 按键事件回显（e2e 注入验证：队列化按键链路 press/release 均记录） */
+    private String keyLog = "";
+
+    private synchronized void logKey(int k, String dir) {
+        if (keyLog.length() > 44) keyLog = keyLog.substring(22);
+        keyLog += " " + k + dir;
+    }
 
     public void startApp() {
         if (started) return;
         started = true;
         cv = new FullCanvas() {
+            /* 按键回调必须在 Canvas 上（派发目标是 Canvas，不是 MIDlet） */
+            protected void keyPressed(int k) { logKey(k, "v"); }
+            protected void keyReleased(int k) { logKey(k, "^"); }
+
             protected void paint(Graphics g) {
                 int w = getWidth(), h = getHeight();
                 g.setColor(0, 0, 0);
@@ -32,10 +43,13 @@ public class CjkTest extends MIDlet implements Runnable {
                 for (int i = 0; i < 60; i++) {
                     g.drawLine(0, i * 4, w, i * 4);
                 }
-                /* 黄色中文：字形方向人工核验特征（最后画，保证完整可读） */
+                /* 文字带垫纯黑：白线负载避开文字区，字形像素可精确断言 */
+                g.setColor(0, 0, 0);
+                g.fillRect(0, 16, w, 72);
                 g.setColor(255, 255, 0);
                 g.drawString("中文测试：歪歪歪传战国风云", 8, 24, 0);
                 g.drawString("载入游戏，请等待。", 8, 44, 0);
+                synchronized (this) { g.drawString(keyLog, 8, 64, 0); }
             }
         };
         Display.getDisplay(this).setCurrent(cv);
