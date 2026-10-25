@@ -9,6 +9,7 @@
 #include "bridge_common.h"
 
 #include <stdarg.h>
+#include <stdatomic.h>
 #include <AudioToolbox/AudioToolbox.h>
 #include "miniz/miniz.h"
 
@@ -345,10 +346,13 @@ int j2meStart(const char* midpJarPath, const char* gameJarPath, const char* rmsD
     return 0;
 }
 
+static void keyPump(void);
+
 const uint32_t* j2meFrame(int* w, int* h) {
     static uint32_t dummy = 0;
     *w = 0; *h = 0;
     if (!gThread || !gRunning) return NULL;
+    keyPump();
     Object* cur = (gDispCls && gFCur) ? UNREF(gDispCls->statics[gFCur->slot].ref) : NULL;
     if (!cur || !vmIsSubclass(cur->clazz, gCanvasCls)) return &dummy;
     Method* df = vmFindMethodImpl(cur->clazz, "doFrame", "()V");
@@ -368,20 +372,48 @@ const uint32_t* j2meFrame(int* w, int* h) {
     return (const uint32_t*)ARRAY_DATA(buf);
 }
 
+/* ============ 按键事件队列 ============
+ * UI 线程只入队，帧驱动（display link -> j2meFrame）开头统一冲刷：
+ * 按键与其他 VM 调用串行化在同一上下文，消除跨线程并发进 VM
+ * 导致的按键丢失/解释器状态竞争 */
+typedef struct { int code, down; } J2KeyEvent;
+#define J2KEYQ_CAP 128
+static J2KeyEvent gKeyQ[J2KEYQ_CAP];
+static atomic_int gKeyQWr = 0;   /* 写位（仅 UI 线程推进） */
+static int gKeyQRd = 0;          /* 读位（仅帧线程推进） */
+
 void j2meKey(int keyCode, int down) {
     if (!gThread || !gRunning) return;
+    int wr = atomic_load(&gKeyQWr);
+    int next = (wr + 1) % J2KEYQ_CAP;
+    if (next == gKeyQRd) return;   /* 队列满：丢弃（防按键风暴） */
+    gKeyQ[wr].code = keyCode;
+    gKeyQ[wr].down = down;
+    atomic_store(&gKeyQWr, next);
+}
+
+/* 在帧驱动上下文调用：把队列中的按键依次派发给当前 Canvas */
+static void keyPump(void) {
     Object* cur = (gDispCls && gFCur) ? UNREF(gDispCls->statics[gFCur->slot].ref) : NULL;
-    if (!cur || !vmIsSubclass(cur->clazz, gCanvasCls)) return;
-    const char* name = down == 1 ? "keyPressed"
-                     : down == 0 ? "keyReleased" : "keyRepeated";
-    Method* m = vmFindMethodImpl(cur->clazz, name, "(I)V");
-    if (!m) return;
-    Slot ka[2];
-    ka[0].ref = JREF(cur);
-    ka[1].ref = NULL;
-    ka[1].i = (int64_t)(int32_t)keyCode;
-    vmCall(gThread, m, ka);
-    if (vmHasException(gThread)) printException(gThread, name);
+    int valid = cur && vmIsSubclass(cur->clazz, gCanvasCls);
+    int wr = atomic_load(&gKeyQWr);
+    while (gKeyQRd != wr && gRunning) {
+        if (valid) {
+            J2KeyEvent ev = gKeyQ[gKeyQRd];
+            const char* name = ev.down == 1 ? "keyPressed"
+                             : ev.down == 0 ? "keyReleased" : "keyRepeated";
+            Method* m = vmFindMethodImpl(cur->clazz, name, "(I)V");
+            if (m) {
+                Slot ka[2];
+                ka[0].ref = JREF(cur);
+                ka[1].ref = NULL;
+                ka[1].i = (int64_t)(int32_t)ev.code;
+                vmCall(gThread, m, ka);
+                if (vmHasException(gThread)) { printException(gThread, name); break; }
+            }
+        }
+        gKeyQRd = (gKeyQRd + 1) % J2KEYQ_CAP;
+    }
 }
 
 void j2mePause(void) {

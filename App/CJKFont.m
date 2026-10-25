@@ -31,7 +31,12 @@ static void cjkInit(void) {
     g_ascent = g_font ? CTFontGetAscent(g_font) : 0;
 }
 
-/* 把单字渲染到 12x12 抗锯齿灰度图（0-255 覆盖率），保留边缘平滑 */
+/* 把单字渲染到 12x12 覆盖率图（0-255）。
+ * 2x 超采样（24px 渲染 -> 2x2 盒式降采样）：覆盖率估计更准，
+ * 下游二值化后笔画连续不断裂（直接 12px 渲染的细笔画覆盖率
+ * 分散，二值化易断笔）。 */
+#define CJK_SS 2
+
 static int renderGlyph(unsigned int c, unsigned char* out144) {
     cjkInit();
     if (!g_font) return 0;
@@ -40,22 +45,35 @@ static int renderGlyph(unsigned int c, unsigned char* out144) {
     CGGlyph glyph = 0;
     if (!CTFontGetGlyphsForCharacters(g_font, &u, &glyph, 1) || glyph == 0) return 0;
 
-    memset(out144, 0, 144);
+    const int bigW = 12 * CJK_SS;
+    unsigned char big[bigW * bigW];
+    memset(big, 0, sizeof(big));
     CGColorSpaceRef cs = CGColorSpaceCreateDeviceGray();
     if (!cs) return 0;
-    CGContextRef ctx = CGBitmapContextCreate(out144, 12, 12, 8, 12, cs, kCGImageAlphaNone);
+    CGContextRef ctx = CGBitmapContextCreate(big, bigW, bigW, 8, bigW, cs, kCGImageAlphaNone);
     CGColorSpaceRelease(cs);
     if (!ctx) return 0;
 
     CGContextSetGrayFillColor(ctx, 1.0, 1.0);
     CGContextSetShouldAntialias(ctx, true);
+    CGContextScaleCTM(ctx, (CGFloat)CJK_SS, (CGFloat)CJK_SS);
     /* CG 绘制坐标原点在左下：基线离底部 (12 - ascent)，让 12px 字身垂直居中 */
     CGFloat base = (g_ascent > 8.0 && g_ascent < 12.0) ? (12.0 - g_ascent) : 3.0;
     CGPoint pos = CGPointMake(0.5f, (float)base);
     CTFontDrawGlyphs(g_font, &glyph, &pos, 1, ctx);
     CGContextRelease(ctx);
 
-    /* CGBitmapContext 内存首行即顶部（top-down），与点阵约定一致：直接输出 */
+    /* 2x2 盒式降采样 -> 12x12 覆盖率（首行即顶部，top-down） */
+    for (int row = 0; row < 12; row++) {
+        for (int col = 0; col < 12; col++) {
+            int sum = 0;
+            for (int sy = 0; sy < CJK_SS; sy++) {
+                const unsigned char* line = big + (row * CJK_SS + sy) * bigW + col * CJK_SS;
+                for (int sx = 0; sx < CJK_SS; sx++) sum += line[sx];
+            }
+            out144[row * 12 + col] = (unsigned char)(sum / (CJK_SS * CJK_SS));
+        }
+    }
     return 1;
 }
 

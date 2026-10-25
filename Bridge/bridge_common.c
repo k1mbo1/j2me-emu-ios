@@ -66,12 +66,13 @@ static Slot n_rasterText(VMThread* t, Slot* a) {
     int penX = x;
     for (int i = 0; i < len; i++) {
         uint16_t c = ch[i];
-        /* 宽字符：交给平台字体栅格化为 12x12 灰度覆盖率（中文/全角）。
-         * 与目标色 alpha 混合，保留抗锯齿边缘（二值化会发虚）。无字形时退回 '?'。 */
+        /* 宽字符：交给平台字体栅格化为 12x12 覆盖率（中文/全角）。
+         * 二值化硬边渲染（覆盖率>=50% 实色）：配合整数倍缩放，
+         * 每个字形像素是干净色块，与真机 S40 点阵字观感一致；
+         * 抗锯齿灰度经放大后边缘发灰发糊，弃用。无字形时退回 '?'。 */
         if (emuIsWideChar(c)) {
             unsigned char glyph[144];
             if (emuCjkGlyph(c, glyph)) {
-                int cr = (color >> 16) & 0xFF, cg = (color >> 8) & 0xFF, cb = color & 0xFF;
                 for (int row = 0; row < 12; row++) {
                     int py = y + row;
                     if (py < clipY || py >= clipY + clipH) continue;
@@ -82,16 +83,11 @@ static Slot n_rasterText(VMThread* t, Slot* a) {
                         /* bold：向右膨胀 1px（与 ASCII 的右邻复制语义一致） */
                         if (bold && col > 0 && glyph[row * 12 + col - 1] > a)
                             a = glyph[row * 12 + col - 1];
-                        if (a < 12) continue;      /* 近零覆盖忽略 */
+                        if (a < 128) continue;      /* 硬边阈值 50% */
                         int pxi = penX + col;
                         if (pxi < clipX || pxi >= clipX + clipW || pxi < 0) continue;
                         if (py * stride + pxi >= data->length) continue;
-                        int32_t dst = px[py * stride + pxi];
-                        int dr = (dst >> 16) & 0xFF, dg = (dst >> 8) & 0xFF, db = dst & 0xFF;
-                        px[py * stride + pxi] = 0xFF000000
-                            | (uint32_t)(dr + (cr - dr) * a / 255) << 16
-                            | (uint32_t)(dg + (cg - dg) * a / 255) << 8
-                            | (uint32_t)(db + (cb - db) * a / 255);
+                        px[py * stride + pxi] = color;
                     }
                 }
                 penX += 12;
