@@ -94,10 +94,12 @@ static NSString* kRmsRoot(void) {
     if (ki != NSNotFound && ki + 1 < args.count) {
         for (NSString* ev in [args[ki + 1] componentsSeparatedByString:@","]) {
             NSArray* parts = [ev componentsSeparatedByString:@"@"];
-            if (parts.count != 2 || parts[0].length < 2) continue;
-            int code = [parts[0] substringToIndex:parts[0].length - 1].intValue;
-            int down = [parts[0] hasSuffix:@"d"] ? 1 : 0;
-            double delay = [parts[1] doubleValue];
+            NSString* p0 = (parts.count > 0) ? (NSString*)parts[0] : nil;
+            NSString* p1 = (parts.count > 1) ? (NSString*)parts[1] : nil;
+            if (parts.count != 2 || p0.length < 2 || p1.length < 1) continue;
+            int code = [p0 substringToIndex:p0.length - 1].intValue;
+            int down = [p0 hasSuffix:@"d"] ? 1 : 0;
+            double delay = [p1 doubleValue];
             if (delay <= 0) continue;
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)),
                            dispatch_get_main_queue(), ^{ j2meKey(code, down); });
