@@ -6,12 +6,15 @@
  *   --frames N     帧数（默认 60）
  *   --keys <seq>   按键序列（数字字符，如 2486 表示 上左下右，每帧一键）
  *   --keydelay N   延迟 N 帧后才开始发送按键（跳过加载画面）
+ *   --keygap N     相邻两次按键至少间隔 N 帧（默认 1）
+ *   --rawkeys a,b  原始键码序列（逗号分隔，可为负数，如 -6,-7 为 Nokia 软键）
  *   --ppm <file>   周期输出 Canvas 帧到 PPM（每 10 帧与最后一帧）
  *   --rms <dir>    RMS 持久化目录（默认 rms）
  */
 #include "vm.h"
 #include "bridge_common.h"
 #include <errno.h>
+#include <limits.h>
 
 /* zip.c 提供 */
 uint8_t* zipReadFile(const char* jarPath, const char* entryName, size_t* outLen);
@@ -211,7 +214,8 @@ static void writePpm(const char* path, Object* canvas, Field* fBuf, Field* fW, F
 
 static int runMidlet(const char* midpJar, const char* gameJar, const char* cls,
                      int frames, const char* keys, const char* ppm, const char* rmsDir,
-                     int keyDelay, int keyHold) {
+                     int keyDelay, int keyHold, int keyGap,
+                     const int* rawKeys, int rawCount) {
     if (vmInit(midpJar) != 0) { vmLog("[midlet] vmInit 失败"); return 1; }
     if (gameJar && vmAddJar(gameJar) != 0) { vmLog("[midlet] game jar 加载失败"); return 1; }
     bridgeSetRmsDir(rmsDir);
@@ -248,23 +252,28 @@ static int runMidlet(const char* midpJar, const char* gameJar, const char* cls,
     Field* fH = canvasCls ? vmFindField(canvasCls, "bufH", "I") : NULL;
 
     int keyIdx = 0;
+    int rawIdx = 0;
+    int lastKeyFrame = -1000000;
     int paintedFrames = 0;
-    int heldKey = -1, releaseAt = -1;
+    int heldKey = INT_MIN, releaseAt = -1;
     for (int fno = 0; fno < frames; fno++) {
         Object* cur = (dispCls && fCur) ? UNREF(dispCls->statics[fCur->slot].ref) : NULL;
         /* 释放上一按键（--keyhold 保持 N 帧后才释放） */
-        if (releaseAt == fno && heldKey >= 0 && cur && vmIsSubclass(cur->clazz, canvasCls)) {
+        if (releaseAt == fno && heldKey != INT_MIN && cur && vmIsSubclass(cur->clazz, canvasCls)) {
             Method* kr = vmFindMethodImpl(cur->clazz, "keyReleased", "(I)V");
             Slot kb[2];
             kb[0].ref = JREF(cur);
             kb[1].i = (int64_t)(int32_t)heldKey;
             if (kr) { vmCall(t, kr, kb); if (vmHasException(t)) { printException(t, "keyReleased"); return 3; } }
-            heldKey = -1;
+            heldKey = INT_MIN;
         }
-        /* 键事件（发给当前 Canvas） */
-        if (keys && keys[keyIdx] && cur && fno >= keyDelay && heldKey < 0
+        /* 键事件（发给当前 Canvas）；--rawkeys 优先（支持负键码，如 Nokia 软键 -6/-7） */
+        int hasKey = (rawKeys && rawIdx < rawCount) || (keys && keys[keyIdx]);
+        if (hasKey && cur && fno >= keyDelay && heldKey == INT_MIN
+            && fno - lastKeyFrame >= keyGap
             && vmIsSubclass(cur->clazz, canvasCls)) {
-            int kc = (uint8_t)keys[keyIdx++];
+            int kc = (rawKeys && rawIdx < rawCount) ? rawKeys[rawIdx++] : (uint8_t)keys[keyIdx++];
+            lastKeyFrame = fno;
             Method* kp = vmFindMethodImpl(cur->clazz, "keyPressed", "(I)V");
             Method* kr = vmFindMethodImpl(cur->clazz, "keyReleased", "(I)V");
             Slot ka[2];
@@ -322,8 +331,8 @@ int main(int argc, char** argv) {
         if (strcmp(argv[i], "--midlet") == 0 && i + 1 < argc) {
             const char* cls = argv[i + 1];
             int frames = 60;
-            const char* keys = NULL, * ppm = NULL, * rmsDir = "rms";
-            int keyDelay = 0, keyHold = 0;
+            const char* keys = NULL, * ppm = NULL, * rmsDir = "rms", * rawSpec = NULL;
+            int keyDelay = 0, keyHold = 0, keyGap = 1;
             for (int j = i + 2; j < argc - 1; j++) {
                 if (strcmp(argv[j], "--frames") == 0) frames = atoi(argv[j + 1]);
                 else if (strcmp(argv[j], "--keys") == 0) keys = argv[j + 1];
@@ -331,9 +340,23 @@ int main(int argc, char** argv) {
                 else if (strcmp(argv[j], "--rms") == 0) rmsDir = argv[j + 1];
                 else if (strcmp(argv[j], "--keydelay") == 0) keyDelay = atoi(argv[j + 1]);
                 else if (strcmp(argv[j], "--keyhold") == 0) keyHold = atoi(argv[j + 1]);
+                else if (strcmp(argv[j], "--keygap") == 0) keyGap = atoi(argv[j + 1]);
+                else if (strcmp(argv[j], "--rawkeys") == 0) rawSpec = argv[j + 1];
+            }
+            /* --rawkeys：逗号分隔的原始键码，可为负数（如 -6 左软键 / -7 右软键） */
+            int rawKeys[64];
+            int rawCount = 0;
+            if (rawSpec) {
+                const char* p = rawSpec;
+                while (*p && rawCount < 64) {
+                    if (*p == ',') { p++; continue; }
+                    rawKeys[rawCount++] = atoi(p);
+                    while (*p && *p != ',') p++;
+                }
             }
             if (argc < 4) { fprintf(stderr, "--midlet 需要 game.jar\n"); return 1; }
-            return runMidlet(argv[1], argv[2], cls, frames, keys, ppm, rmsDir, keyDelay, keyHold);
+            return runMidlet(argv[1], argv[2], cls, frames, keys, ppm, rmsDir, keyDelay, keyHold, keyGap,
+                             rawKeys, rawCount);
         }
     }
 

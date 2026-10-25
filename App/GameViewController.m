@@ -39,6 +39,9 @@ static CGFloat safeBottomY(UIViewController* vc) {
 #define K_STAR   '*'
 #define K_ZERO   '0'
 #define K_POUND  '#'
+/* Nokia 软键（FullCanvas 常量）：S40 国产游戏用它们开菜单/取消 */
+#define K_SOFT1  (-6)
+#define K_SOFT2  (-7)
 
 #pragma mark - GameView：像素渲染（最近邻缩放）
 
@@ -224,7 +227,7 @@ static double gKeyLastRep[256];
     CGFloat top = CGRectGetMaxY(self.navigationController.navigationBar.frame);
     if (top <= 0) top = safeTop(self);
     CGFloat bottom = safeBottomY(self);
-    CGFloat padH = 196.0;
+    CGFloat padH = 240.0;
 
     CGRect gameRect = CGRectMake(0, top, vb.size.width, bottom - top - (self.padVisible ? padH : 0));
     /* 逻辑分辨率缩放：档位 0=aspect-fit 适应；1/2/3=整数倍（超屏时降为适应，避免裁剪） */
@@ -280,11 +283,21 @@ static double gKeyLastRep[256];
     _keyPad = [[UIView alloc] initWithFrame:CGRectZero];
     _keyPad.backgroundColor = [UIColor colorWithWhite:0.12 alpha:1];
 
-    /* 内容容器（336x180，layoutAll 中水平居中） */
-    UIView* content = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 336, 180)];
+    /* 内容容器（336x224，layoutAll 中水平居中） */
+    UIView* content = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 336, 224)];
     content.tag = 1001;
     content.userInteractionEnabled = YES;
     [_keyPad addSubview:content];
+
+    /* 软键行（顶部）：左软键 -6 开菜单 / 右软键 -7 取消（Nokia S40 游戏必需） */
+    struct { CGFloat x; int code; NSString* title; } softKeys[] = {
+        {8,   K_SOFT1, @"左软键"},
+        {172, K_SOFT2, @"右软键"},
+    };
+    for (int i = 0; i < 2; i++) {
+        CGRect f = CGRectMake(softKeys[i].x, 8, 156, 36);
+        [self addKeyButtonTo:content frame:f code:softKeys[i].code title:softKeys[i].title fontSize:15.0];
+    }
 
     /* 方向十字（左）：▲ / ◀ ● ▶ / ▼ */
     struct { int col, row; int code; NSString* title; } padKeys[] = {
@@ -295,7 +308,7 @@ static double gKeyLastRep[256];
         {1, 2, K_DOWN,  @"▼"},
     };
     CGFloat bs = 56.0;
-    CGFloat ox = 8.0, oy = 8.0;
+    CGFloat ox = 8.0, oy = 52.0;
     for (int i = 0; i < 5; i++) {
         CGRect f = CGRectMake(ox + padKeys[i].col * bs, oy + padKeys[i].row * bs, bs - 4, bs - 4);
         [self addKeyButtonTo:content frame:f code:padKeys[i].code title:padKeys[i].title];
@@ -318,12 +331,17 @@ static double gKeyLastRep[256];
 }
 
 - (void)addKeyButtonTo:(UIView*)parent frame:(CGRect)frame code:(int)code title:(NSString*)title {
+    [self addKeyButtonTo:parent frame:frame code:code title:title fontSize:22.0];
+}
+
+- (void)addKeyButtonTo:(UIView*)parent frame:(CGRect)frame code:(int)code title:(NSString*)title
+              fontSize:(CGFloat)fontSize {
     KeyPadButton* btn = [KeyPadButton buttonWithType:UIButtonTypeSystem];
     btn.frame = frame;
     btn.keyCode = code;
     [btn setTitle:title forState:UIControlStateNormal];
     [btn setTitleColor:[UIColor whiteColor] forState:UIControlStateNormal];
-    btn.titleLabel.font = [UIFont boldSystemFontOfSize:22];
+    btn.titleLabel.font = [UIFont boldSystemFontOfSize:fontSize];
     btn.backgroundColor = [UIColor colorWithWhite:0.22 alpha:1];
     btn.layer.cornerRadius = 10;
     [btn addTarget:self action:@selector(keyDown:) forControlEvents:UIControlEventTouchDown];
@@ -337,13 +355,17 @@ static double gKeyLastRep[256];
 - (void)keyUp:(KeyPadButton*)sender   { [self keyPress:sender.keyCode down:NO]; }
 
 - (void)keyPress:(int)code down:(BOOL)down {
-    if (code <= 0 || code >= 256 || self.paused) return;
+    /* 允许 Nokia 软键等负键码（-1..-31），其余仍限 1..255 */
+    if (self.paused || code == 0 || code >= 256 || code < -31) return;
+    BOOL soft = (code < 0);
     if (down) {
-        gKeyHeld[code] = CACurrentMediaTime();
-        gKeyLastRep[code] = 0;
+        if (!soft) {
+            gKeyHeld[code] = CACurrentMediaTime();
+            gKeyLastRep[code] = 0;
+        }
         j2meKey(code, 1);
     } else {
-        gKeyHeld[code] = 0;
+        if (!soft) gKeyHeld[code] = 0;
         j2meKey(code, 0);
     }
 }
